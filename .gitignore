@@ -1,6 +1,5 @@
 /.cursor
 *.exe
-/scripts/.api
 scripts/common
 scripts/core_lua
 scripts/core_universal_kicks
