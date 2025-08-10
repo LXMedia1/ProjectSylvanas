@@ -6,6 +6,9 @@ Lua 5.1 modules and tooling for navigation and movement. This repository focuses
 - **Lx_Nav**: Standalone navigation library with pathfinding and human‑like movement
   - Setup & Usage: [@docs/Lx_Nav.md](@docs/Lx_Nav.md)
 
+- **Lx_Routine**: Adaptive PvE fight routine for all classes (Retail)
+  - Setup & Usage: [@docs/Lx_Routine.md](@docs/Lx_Routine.md)
+
 ### Docs
 - All documentation lives in `@docs/`
   - Index (work in progress): `@docs/INDEX.md`

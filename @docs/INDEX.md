@@ -7,5 +7,9 @@ Lx_Nav Documentation Index
  - Lx_Nav API: `Lx_Nav_API.md`
    - Public API surface for `_G.Lx_Nav`
 
+- Lx_Routine: Setup & Usage: `Lx_Routine.md`
+  - Adaptive PvE fight routine for Retail
+  - Lx_Routine API: `Lx_Routine_API.md`
+
 
 
