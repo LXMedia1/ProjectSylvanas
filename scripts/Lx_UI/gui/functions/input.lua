@@ -1,5 +1,5 @@
-local constants = require("lx_ui/gui/utils/constants")
-local helpers = require("lx_ui/gui/utils/helpers")
+local constants = require("Lx_UI/gui/utils/constants")
+local helpers = require("Lx_UI/gui/utils/helpers")
 
 local function update_mouse()
     local p = core.get_cursor_position()
@@ -15,5 +15,7 @@ end
 return {
     update_mouse = update_mouse
 }
+
+
 
 

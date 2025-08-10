@@ -1,5 +1,5 @@
-local constants = require("lx_ui/gui/utils/constants")
-local input = require("lx_ui/gui/functions/input")
+local constants = require("Lx_UI/gui/utils/constants")
+local input = require("Lx_UI/gui/functions/input")
 
 local function render_window(gui)
     -- background
@@ -28,5 +28,7 @@ return {
     render_all = render_all,
     render_menu_controls = render_menu_controls
 }
+
+
 
 

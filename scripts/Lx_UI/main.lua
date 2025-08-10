@@ -1,11 +1,11 @@
 -- ==================== Lx_UI MAIN ====================
 
 -- Imports (module-local, no globals exposed yet)
-local constants = require("lx_ui/gui/utils/constants")
-local helpers = require("lx_ui/gui/utils/helpers")
-local input = require("lx_ui/gui/functions/input")
-local rendering = require("lx_ui/gui/functions/rendering")
-local menu_module = require("lx_ui/gui/elements/menu")
+local constants = require("Lx_UI/gui/utils/constants")
+local helpers = require("Lx_UI/gui/utils/helpers")
+local input = require("Lx_UI/gui/functions/input")
+local rendering = require("Lx_UI/gui/functions/rendering")
+local menu_module = require("Lx_UI/gui/elements/menu")
 
 local Menu = menu_module.Menu
 
@@ -56,5 +56,7 @@ core.register_on_render_menu_callback(on_render_menu)
 core.log("Lx_UI loaded: modular UI system initialized")
 
 return Lx_UI
+
+
 
 
