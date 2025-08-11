@@ -30,6 +30,8 @@ function Input:new(owner_gui, x, y, w, h, opts, on_change)
   o._bs_prev_down = false
   o._bs_next_repeat = 0
   o._force_focus_frames = 0
+  o._pre_focus_active = false
+  o._pre_focus_deadline_ms = 0
   -- small invisible menu window behind the input + a core text_input to grab focus
   if core.menu and core.menu.window then
     local bid = "lx_ui_input_blocker_" .. tostring(owner_gui.unique_key or "gui") .. "_" .. tostring(math.random(1000000))
@@ -164,6 +166,14 @@ function Input:render()
   -- focus handling
   local m = constants.mouse_state.position
   local over = helpers.is_point_in_rect(m.x, m.y, gx, gy, w, h)
+  -- cancel pre-focus after timeout
+  do
+    local now_t = (core.time and core.time()) or 0
+    if self._pre_focus_active and now_t > (self._pre_focus_deadline_ms or 0) then
+      self._pre_focus_active = false
+      if not self.is_focused then constants.typing_capture = nil end
+    end
+  end
   if over and constants.mouse_state.left_clicked then
     -- focus only on a real double-click (short interval + minimal movement)
     local now_t = (core.time and core.time()) or 0
@@ -177,6 +187,7 @@ function Input:render()
       -- publish capture rect so menu can align hidden text_input reliably
       constants.typing_capture = { x = gx, y = gy, w = w, h = h }
       self._force_focus_frames = 6
+      self._pre_focus_active = false
       if self.gui._text_inputs then
         for _, ti in ipairs(self.gui._text_inputs) do
           if ti ~= self then ti.is_focused = false end
@@ -184,6 +195,11 @@ function Input:render()
       end
       self._last_click_t = -100000 -- prevent triple-click from chaining
     else
+      -- arm pre-focus so next click routes to menu textbox
+      self._pre_focus_active = true
+      self._pre_focus_deadline_ms = now_t + 350
+      constants.typing_capture = { x = gx, y = gy, w = w, h = h }
+      self._force_focus_frames = 3
       self._last_click_t = now_t
       self._last_click_x = constants.mouse_state.position.x or 0
       self._last_click_y = constants.mouse_state.position.y or 0
@@ -192,6 +208,7 @@ function Input:render()
     self.is_focused = false
     constants.is_typing = false
     constants.typing_capture = nil
+    self._pre_focus_active = false
   end
 
   -- input handling when focused
@@ -324,7 +341,7 @@ end
 
 -- Render an invisible menu window exactly over the input to block clicks
 function Input:render_proxy_menu()
-  if not self.is_focused then return end
+  if not (self.is_focused or self._pre_focus_active) then return end
   if not self._blocker or not (self.gui and self.gui.is_open) then return end
   -- Align a tiny menu window behind our input and render the menu textbox inside
   local gx = self.gui.x + self.x
