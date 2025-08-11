@@ -175,34 +175,16 @@ function Input:render()
     end
   end
   if over and constants.mouse_state.left_clicked then
-    -- focus only on a real double-click (short interval + minimal movement)
-    local now_t = (core.time and core.time()) or 0
-    local dt = now_t - (self._last_click_t or 0)
-    local dx = (constants.mouse_state.position.x or 0) - (self._last_click_x or 0)
-    local dy = (constants.mouse_state.position.y or 0) - (self._last_click_y or 0)
-    local dist2 = dx*dx + dy*dy
-    if dt >= 0 and dt <= 250 and dist2 <= 36 then
-      self.is_focused = true
-      constants.is_typing = true
-      -- publish capture rect so menu can align hidden text_input reliably
-      constants.typing_capture = { x = gx, y = gy, w = w, h = h }
-      self._force_focus_frames = 6
-      self._pre_focus_active = false
-      if self.gui._text_inputs then
-        for _, ti in ipairs(self.gui._text_inputs) do
-          if ti ~= self then ti.is_focused = false end
-        end
+    -- Single-click to focus and start typing
+    self.is_focused = true
+    constants.is_typing = true
+    constants.typing_capture = { x = gx, y = gy, w = w, h = h }
+    self._force_focus_frames = 6
+    self._pre_focus_active = false
+    if self.gui._text_inputs then
+      for _, ti in ipairs(self.gui._text_inputs) do
+        if ti ~= self then ti.is_focused = false end
       end
-      self._last_click_t = -100000 -- prevent triple-click from chaining
-    else
-      -- arm pre-focus so next click routes to menu textbox
-      self._pre_focus_active = true
-      self._pre_focus_deadline_ms = now_t + 350
-      constants.typing_capture = { x = gx, y = gy, w = w, h = h }
-      self._force_focus_frames = 3
-      self._last_click_t = now_t
-      self._last_click_x = constants.mouse_state.position.x or 0
-      self._last_click_y = constants.mouse_state.position.y or 0
     end
   elseif constants.mouse_state.left_clicked and not over then
     self.is_focused = false
