@@ -143,11 +143,11 @@ local function render_window(gui)
             if ti and ti.render then ti:render() end
         end
     end
-    -- After drawing, render proxy menu inputs for focused text boxes to grab key input and block game controls
+    -- After drawing, render invisible blockers for focused text boxes to block clicks and inputs
     if gui._text_inputs then
         for i = 1, #gui._text_inputs do
             local ti = gui._text_inputs[i]
-            if ti and ti.render_proxy_menu then ti:render_proxy_menu() end
+            if ti and ti.render_blocker then ti:render_blocker() end
         end
     end
     -- Draw listboxes first (their panels), then draw comboboxes so dropdowns appear above

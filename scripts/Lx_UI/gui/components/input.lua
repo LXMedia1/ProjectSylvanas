@@ -18,8 +18,12 @@ function Input:new(owner_gui, x, y, w, h, opts, on_change)
   o.is_focused = false
   o._keys_down = {}
   o._caret_t = 0
-  o._proxy_id = "lxui_input_proxy_" .. tostring(owner_gui.unique_key or "gui") .. "_" .. tostring(o):gsub("[^%w]","_")
-  o._menu_text = nil
+  -- invisible blocker window to stop click-through and help block game input while editing
+  if core.menu and core.menu.window then
+    local bid = "lx_ui_input_blocker_" .. tostring(owner_gui.unique_key or "gui") .. "_" .. tostring(math.random(1000000))
+    o._blocker = core.menu.window(bid)
+  end
+  o._movement_locked = false
   return o
 end
 
@@ -95,6 +99,10 @@ function Input:render()
 
   -- input handling when focused
   if self.is_focused and core.input and core.graphics and core.graphics.translate_vkey_to_string then
+    if not self._movement_locked and core.input.disable_movement then
+      core.input.disable_movement(true)
+      self._movement_locked = true
+    end
     -- Enter handling
     local VK_RETURN = 0x0D
     if key_edge(self, VK_RETURN) then
@@ -143,22 +151,48 @@ function Input:render()
     end
   else
     self._caret_t = 0
+    if self._movement_locked and core.input.disable_movement then
+      core.input.disable_movement(false)
+      self._movement_locked = false
+    end
   end
 end
 
--- Render a hidden core.menu.text_input to let the engine capture and block input while focused
-function Input:render_proxy_menu()
-  if not self.is_focused then return end
-  if core.menu and core.menu.text_input then
-    if not self._menu_text then
-      -- second arg save_input=false
-      self._menu_text = core.menu.text_input(self._proxy_id, false)
-    end
-    if self._menu_text and self._menu_text.render then
-      -- Render with empty label; this will keep core focus on a text box without showing anything
-      -- Some runtimes still draw a control; if so, it will be inside the menu tree node, not our canvas
-      self._menu_text:render("", "")
-    end
+-- Render an invisible menu window exactly over the input to block clicks
+function Input:render_blocker()
+  if not (self.is_focused and self._blocker) then return end
+  local bx = self.gui.x + self.x
+  local by = self.gui.y + self.y
+  if self._blocker.stop_forcing_size then self._blocker:stop_forcing_size() end
+  if self._blocker.force_next_begin_window_pos then
+    self._blocker:force_next_begin_window_pos(constants.vec2.new(bx, by))
+  end
+  if self._blocker.set_next_window_min_size then
+    self._blocker:set_next_window_min_size(constants.vec2.new(self.w, self.h))
+  end
+  if self._blocker.force_window_size then
+    self._blocker:force_window_size(constants.vec2.new(self.w, self.h))
+  end
+  if self._blocker.set_background_multicolored then
+    local c = constants.color.new(0,0,0,0)
+    self._blocker:set_background_multicolored(c,c,c,c)
+  end
+  if self._blocker.begin then
+    self._blocker:begin(
+      0,
+      false,
+      constants.color.new(0,0,0,0),
+      constants.color.new(0,0,0,0),
+      0,
+      (core.enums and core.enums.window_enums and core.enums.window_enums.window_behaviour_flags and core.enums.window_enums.window_behaviour_flags.NO_MOVE) or 0,
+      0,
+      0,
+      function()
+        if self._blocker.add_artificial_item_bounds then
+          self._blocker:add_artificial_item_bounds(constants.vec2.new(0,0), constants.vec2.new(self.w, self.h))
+        end
+      end
+    )
   end
 end
 
