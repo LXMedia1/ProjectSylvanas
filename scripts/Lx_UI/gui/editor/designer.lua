@@ -490,7 +490,8 @@ function Designer:render(ox, oy)
     local sx = self.gui.x + self.selected.x
     local sy = self.gui.y + self.selected.y
     local bw, bh = 40, 16
-    local bx, by = sx + 6, sy + 6
+    -- place just above the component so it doesn't overlap
+    local bx, by = sx + 6, sy - bh - 4
     core.graphics.rect_2d_filled(constants.vec2.new(bx, by), bw, bh, constants.color.new(36,52,96,220), 4)
     core.graphics.rect_2d(constants.vec2.new(bx, by), bw, bh, constants.color.new(32,40,70,255), 1, 4)
     local label = "Edit"
