@@ -17,3 +17,6 @@ scripts/ext_0_plugin_universal_reflects
 /scripts/Test_Rider
 scripts/core_universal_utility
 /scripts_log
+/scripts/Lx_Routine
+*.zip
+/external

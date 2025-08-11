@@ -1,12 +1,13 @@
-local constants = require("Lx_UI/gui/utils/constants")
-local helpers = require("Lx_UI/gui/utils/helpers")
+local constants = require("gui/utils/constants")
+local helpers = require("gui/utils/helpers")
 
 local function update_mouse()
     local p = core.get_cursor_position()
     constants.mouse_state.position.x = p.x
     constants.mouse_state.position.y = p.y
     local down = core.input.is_key_pressed(0x01)
-    constants.mouse_state.left_clicked = constants.mouse_state.last_left and not down
+    -- clicked on release
+    constants.mouse_state.left_clicked = (constants.mouse_state.last_left and not down) or false
     constants.mouse_state.left_down = down
     constants.mouse_state.last_left = down
     constants.mouse_state.is_over_gui = helpers.is_mouse_over_gui_area()
