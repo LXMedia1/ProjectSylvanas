@@ -193,9 +193,12 @@ local function render_topbar()
             if chk.get_state then enabled = chk:get_state() elseif chk.get then enabled = chk:get() end
         end
         if gui.is_hidden_from_launcher then enabled = false end
-        -- filter by launcher assignment: only show items assigned to topbar or default
+        -- filter by launcher assignment:
+        -- Topbar (3rd option) acts as an aggregator: always show items assigned to topbar, sidebar, palette
+        -- and show items assigned to default only when the active launcher mode is Topbar
         local slot = (constants.launcher_assignments and constants.launcher_assignments[name]) or "default"
-        local allowed = (slot == "topbar" or slot == "default")
+        local mode = (constants.launcher_mode or 1)
+        local allowed = (slot == "topbar" or slot == "sidebar" or slot == "palette" or (slot == "default" and mode == 3))
         if enabled and allowed then
             local label = name
             local text_w = (core.graphics.get_text_width and core.graphics.get_text_width(label, constants.FONT_SIZE, 0)) or 60
@@ -315,7 +318,8 @@ local function render_sidebar()
         end
         if gui and gui.is_hidden_from_launcher then enabled = false end
         local slot = (constants.launcher_assignments and constants.launcher_assignments[name]) or "default"
-        local allowed = (slot == "sidebar" or slot == "default")
+        local mode = (constants.launcher_mode or 1)
+        local allowed = (slot == "sidebar" or (slot == "default" and mode == 2))
         if enabled and allowed then num_enabled = num_enabled + 1 end
     end
     local panel_h = num_enabled * item_h + math.max(0, num_enabled - 1) * spacing + 16
@@ -335,7 +339,8 @@ local function render_sidebar()
         end
         if gui.is_hidden_from_launcher then enabled = false end
         local slot = (constants.launcher_assignments and constants.launcher_assignments[name]) or "default"
-        local allowed = (slot == "sidebar" or slot == "default")
+        local mode = (constants.launcher_mode or 1)
+        local allowed = (slot == "sidebar" or (slot == "default" and mode == 2))
         if enabled and allowed then
             local hovered = (mouse.x >= x and mouse.x <= x + w and mouse.y >= cur_y and mouse.y <= cur_y + item_h)
             local bg = gui.is_open and col_item_active or (hovered and col_item_hover or col_item)
@@ -388,7 +393,8 @@ local function render_palette()
         end
         if gui.is_hidden_from_launcher then enabled = false end
         local slot = (constants.launcher_assignments and constants.launcher_assignments[name]) or "default"
-        local allowed = (slot == "palette" or slot == "default")
+        local mode = (constants.launcher_mode or 1)
+        local allowed = (slot == "palette" or (slot == "default" and mode == 1))
         if enabled and allowed then table.insert(entries, { name = name, gui = gui }) end
     end
     local panel_h = #entries * item_h + math.max(0, #entries - 1) * spacing + 16
