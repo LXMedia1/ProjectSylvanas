@@ -149,6 +149,32 @@ local function render_window(gui)
             if lbl and lbl.render then lbl:render() end
         end
     end
+
+    -- Draw listbox drag ghost last so it appears above all GUI content
+    if constants.listbox_drag and constants.listbox_drag.source and constants.listbox_drag.source.gui == gui then
+        local ghost_text = tostring(constants.listbox_drag.text or "")
+        if ghost_text ~= "" and core.graphics and core.graphics.text_2d then
+            local mouse = constants.mouse_state.position
+            local row_h = (constants.FONT_SIZE or 14) + 6
+            local ghost_bg = constants.color.new(20, 30, 50, 200)
+            local ghost_bd = constants.color.new(120, 190, 255, 230)
+            local tw = (core.graphics.get_text_width and core.graphics.get_text_width(ghost_text, constants.FONT_SIZE, 0)) or 60
+            local pad = 6
+            local box_w = tw + pad * 2
+            local box_h = row_h - 2
+            local bx = mouse.x + 14
+            local by = mouse.y + 10
+            if core.graphics.rect_2d_filled then
+                core.graphics.rect_2d_filled(constants.vec2.new(bx, by), box_w, box_h, ghost_bg, 4)
+            end
+            if core.graphics.rect_2d then
+                core.graphics.rect_2d(constants.vec2.new(bx, by), box_w, box_h, ghost_bd, 1, 4)
+            end
+            local tx = bx + pad
+            local ty = by + math.floor((box_h - (constants.FONT_SIZE or 14)) / 2) - 1
+            core.graphics.text_2d(ghost_text, constants.vec2.new(tx, ty), constants.FONT_SIZE, constants.color.white(255), false)
+        end
+    end
 end
 
 local function render_topbar()
