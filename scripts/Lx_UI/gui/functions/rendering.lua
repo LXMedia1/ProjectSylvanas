@@ -148,6 +148,7 @@ local function render_window(gui)
         for i = 1, #gui._text_inputs do
             local ti = gui._text_inputs[i]
             if ti and ti.render_proxy_menu then ti:render_proxy_menu() end
+            if ti and ti.ensure_hidden_if_inactive then ti:ensure_hidden_if_inactive() end
         end
     end
     -- Draw listboxes first (their panels), then draw comboboxes so dropdowns appear above

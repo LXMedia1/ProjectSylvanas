@@ -410,6 +410,13 @@ function Input:render_proxy_menu()
   end
 end
 
+function Input:ensure_hidden_if_inactive()
+  if self._blocker and self._blocker.set_visibility then
+    local should_hide = (not (self.is_focused or self._pre_focus_active)) or (not (self.gui and self.gui.is_open))
+    if should_hide then self._blocker:set_visibility(false) end
+  end
+end
+
 return Input
 
 
