@@ -137,39 +137,16 @@ local function on_update()
                     local ox, oy = gui._tabs:get_content_origin()
                     local x = gui.x + ox
                     local y = gui.y + oy
-                    -- Default launcher selector (styled checkboxes)
-                    local label_col = constants.color.white(255)
+                    -- Default launcher selector (combobox)
                     if core.graphics.text_2d then
-                        core.graphics.text_2d("Selected Default:", constants.vec2.new(x, y), constants.FONT_SIZE, label_col, false)
+                        core.graphics.text_2d("Selected Default:", constants.vec2.new(x, y), constants.FONT_SIZE, constants.color.white(255), false)
                     end
-                    local bx = x
-                    local by = y + 18
-                    local box_w, box_h = 16, 16
-                    local function draw_radio(label, key)
-                        local state = (constants.__default_launcher == key)
-                        local bg = constants.color.new(30, 44, 76, 230)
-                        local border = constants.color.new(18, 22, 30, 220)
-                        local fill = state and constants.color.new(90, 140, 220, 255) or bg
-                        if core.graphics.rect_2d_filled then
-                            core.graphics.rect_2d_filled(constants.vec2.new(bx, by), box_w, box_h, fill, 4)
-                        end
-                        if core.graphics.rect_2d then
-                            core.graphics.rect_2d(constants.vec2.new(bx, by), box_w, box_h, border, 1, 4)
-                        end
-                        if state and core.graphics.line_2d then
-                            local c = constants.color.white(255)
-                            local x1, y1 = bx + 4, by + math.floor(box_h/2)
-                            local x2, y2 = bx + 7, by + box_h - 4
-                            local x3, y3 = bx + box_w - 3, by + 4
-                            core.graphics.line_2d(constants.vec2.new(x1, y1), constants.vec2.new(x2, y2), c, 2)
-                            core.graphics.line_2d(constants.vec2.new(x2, y2), constants.vec2.new(x3, y3), c, 2)
-                        end
-                        if core.graphics.text_2d then
-                            core.graphics.text_2d(label, constants.vec2.new(bx + box_w + 8, by - 2), constants.FONT_SIZE, label_col, false)
-                        end
-                        local m = constants.mouse_state.position
-                        local over = (m.x >= bx and m.x <= bx + box_w and m.y >= by and m.y <= by + box_h)
-                        if over and constants.mouse_state.left_clicked then
+                    if not gui._default_launcher_combo then
+                        local items = { "Sidebar", "Palette", "Topbar" }
+                        local map = { sidebar = 1, palette = 2, topbar = 3 }
+                        local initial = map[constants.__default_launcher or "sidebar"] or 1
+                        gui._default_launcher_combo = gui:AddCombobox(ox, oy + 18, 200, 24, items, initial, function(self, idx, item)
+                            local key = (idx == 2) and "palette" or (idx == 3 and "topbar" or "sidebar")
                             constants.__default_launcher = key
                             if key == "palette" then constants.launcher_mode = 1 elseif key == "sidebar" then constants.launcher_mode = 2 else constants.launcher_mode = 3 end
                             persist.save_plugin({
@@ -178,17 +155,18 @@ local function on_update()
                                 palette_left_offset = constants.PALETTE_LEFT_OFFSET or 0,
                                 default_launcher = key
                             })
-                        end
-                        by = by + 22
+                        end)
+                        gui._default_launcher_combo:set_visible_if(function() return gui._tabs:is_active("Settings") end)
+                    else
+                        -- keep combobox aligned
+                        gui._default_launcher_combo.x = ox
+                        gui._default_launcher_combo.y = oy + 18
                     end
-                    draw_radio("Sidebar", "sidebar")
-                    draw_radio("Palette", "palette")
-                    draw_radio("Topbar", "topbar")
 
                     -- Four listboxes: Default, Topbar, Sidebar, Palette
                     -- Build lists only once, then reuse
                     if not gui._lb_default then
-                        local list_y = by + 12
+                        local list_y = (oy + 18) + 24 + 12
                         gui._lb_default = gui:AddListbox(ox, list_y, 180, 200, {}, function() end, "Default"):setType("launcher"):setDropSlot("default")
                         gui._lb_topbar  = gui:AddListbox(ox + 190, list_y, 180, 200, {}, function() end, "Topbar"):setType("launcher"):setDropSlot("topbar")
                         gui._lb_sidebar = gui:AddListbox(ox + 380, list_y, 180, 200, {}, function() end, "Sidebar"):setType("launcher"):setDropSlot("sidebar")
@@ -199,7 +177,7 @@ local function on_update()
                         gui._lb_palette:set_visible_if(function() return gui._tabs:is_active("Settings") end)
                     end
                     -- Keep positions synced to tab origin
-                    local list_y = by + 12
+                    local list_y = (oy + 18) + 24 + 12
                     gui._lb_default.x, gui._lb_default.y = ox, list_y
                     gui._lb_topbar.x,  gui._lb_topbar.y  = ox + 190, list_y
                     gui._lb_sidebar.x, gui._lb_sidebar.y = ox + 380, list_y
