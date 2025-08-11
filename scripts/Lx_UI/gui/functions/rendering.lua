@@ -178,7 +178,6 @@ local function render_window(gui)
 end
 
 local function render_topbar()
-    if (constants.launcher_mode or 1) ~= 3 then return end
     if not core.graphics or not core.graphics.get_screen_size then return end
     local screen = core.graphics.get_screen_size()
     local bar_h = 28
@@ -194,11 +193,10 @@ local function render_topbar()
         end
         if gui.is_hidden_from_launcher then enabled = false end
         -- filter by launcher assignment:
-        -- Topbar (3rd option) acts as an aggregator: always show items assigned to topbar, sidebar, palette
-        -- and show items assigned to default only when the active launcher mode is Topbar
+        -- Show items assigned to topbar always; show default only when Topbar is the selected launcher
         local slot = (constants.launcher_assignments and constants.launcher_assignments[name]) or "default"
         local mode = (constants.launcher_mode or 1)
-        local allowed = (slot == "topbar" or slot == "sidebar" or slot == "palette" or (slot == "default" and mode == 3))
+        local allowed = (slot == "topbar" or (slot == "default" and mode == 3))
         if enabled and allowed then
             local label = name
             local text_w = (core.graphics.get_text_width and core.graphics.get_text_width(label, constants.FONT_SIZE, 0)) or 60
@@ -207,6 +205,7 @@ local function render_topbar()
             table.insert(tabs, { name = name, gui = gui, label = label, width = tab_w, text_w = text_w })
         end
     end
+    if #tabs == 0 then return end
 
     -- compute total width and center
     local spacing = 12
@@ -289,7 +288,6 @@ end
 
 -- Sidebar launcher (mode 2)
 local function render_sidebar()
-    if (constants.launcher_mode or 1) ~= 2 then return end
     if not core.graphics or not core.graphics.get_screen_size then return end
     local screen = core.graphics.get_screen_size()
     local w = constants.SIDEBAR_WIDTH or 160
@@ -322,6 +320,7 @@ local function render_sidebar()
         local allowed = (slot == "sidebar" or (slot == "default" and mode == 2))
         if enabled and allowed then num_enabled = num_enabled + 1 end
     end
+    if num_enabled == 0 then return end
     local panel_h = num_enabled * item_h + math.max(0, num_enabled - 1) * spacing + 16
     if core.graphics.rect_2d_filled then
         core.graphics.rect_2d_filled(constants.vec2.new(x - 6, y - 8), w + 12, panel_h, col_panel, 6)
@@ -365,7 +364,6 @@ end
 
 -- Palette launcher (mode 1)
 local function render_palette()
-    if (constants.launcher_mode or 1) ~= 1 then return end
     if not core.graphics or not core.graphics.get_screen_size then return end
     local screen = core.graphics.get_screen_size()
     local w = constants.PALETTE_WIDTH or 300
@@ -396,6 +394,10 @@ local function render_palette()
         local mode = (constants.launcher_mode or 1)
         local allowed = (slot == "palette" or (slot == "default" and mode == 1))
         if enabled and allowed then table.insert(entries, { name = name, gui = gui }) end
+    end
+    if #entries == 0 then
+        constants.palette_rect = nil
+        return
     end
     local panel_h = #entries * item_h + math.max(0, #entries - 1) * spacing + 16
     constants.palette_rect = { x = x - 8, y = y - 8, w = w + 16, h = panel_h }
