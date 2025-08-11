@@ -12,6 +12,7 @@ local palette_defs = {
   { id = "combobox", name = "Combobox", w = 160, h = 24,  cat = "Inputs" },
   { id = "slider",   name = "Slider",   w = 180, h = 12,  cat = "Inputs" },
   { id = "listbox",  name = "Listbox",  w = 180, h = 160, cat = "Inputs" },
+  { id = "input",    name = "Input",    w = 200, h = 22,  cat = "Inputs" },
   { id = "panel",    name = "Panel",    w = 220, h = 160, cat = "Containers" },
 }
 
@@ -102,6 +103,10 @@ local function draw_component(comp, x, y)
     core.graphics.rect_2d(constants.vec2.new(x, y), w, h, constants.color.new(32, 40, 70, 255), 1, 6)
     core.graphics.rect_2d_filled(constants.vec2.new(x, y), w, 18, constants.color.new(56, 80, 140, 230), 6)
     core.graphics.text_2d("Listbox", constants.vec2.new(x + 8, y + 2), constants.FONT_SIZE, constants.color.white(255), false)
+  elseif k == "input" then
+    core.graphics.rect_2d_filled(constants.vec2.new(x, y), w, h, constants.color.new(20, 26, 42, 245), 4)
+    core.graphics.rect_2d(constants.vec2.new(x, y), w, h, constants.color.new(32, 40, 70, 255), 1, 4)
+    core.graphics.text_2d(comp.text or "Input", constants.vec2.new(x + 6, y - 1), constants.FONT_SIZE, constants.color.white(255), false)
   elseif k == "panel" then
     core.graphics.rect_2d_filled(constants.vec2.new(x, y), w, h, constants.color.new(14, 18, 30, 220), 6)
     core.graphics.rect_2d(constants.vec2.new(x, y), w, h, constants.color.new(32, 40, 70, 255), 1, 6)
@@ -424,7 +429,7 @@ function Designer:render(ox, oy)
     local cm_y = self._ctx_y
     local cm_w = 160
     local row_h = 18
-    local items = { "Resize", "Bring to front", "Duplicate", "Delete" }
+    local items = { "Edit", "Resize", "Bring to front", "Duplicate", "Delete" }
     local bg = constants.color.new(16, 20, 34, 240)
     local bd = constants.color.new(32, 40, 70, 255)
     core.graphics.rect_2d_filled(constants.vec2.new(cm_x, cm_y), cm_w, row_h * #items + 8, bg, 6)
@@ -439,7 +444,13 @@ function Designer:render(ox, oy)
       core.graphics.text_2d(items[i], constants.vec2.new(cm_x + 8, my - 1), constants.FONT_SIZE, constants.color.white(255), false)
       if over and constants.mouse_state.left_clicked then
         local act = items[i]
-        if act == "Resize" then
+        if act == "Edit" then
+          -- open properties popup near the cursor
+          self._edit_props_popup = true
+          self._props_x, self._props_y = cm_x + cm_w + 6, cm_y
+          self._props_just_opened = true
+          self._ctx_open = false
+        elseif act == "Resize" then
           -- toggle resize mode; resizing works by dragging the corner handles
           self._resize_mode = not not (not self._resize_mode)
           self._ctx_open = false
@@ -474,11 +485,12 @@ function Designer:render(ox, oy)
     end
   end
 
-  -- Top Edit button for properties (opens a lightweight popup)
-  do
-    local show_btn = true
-    local bx, by = canvas_x + 8, canvas_y + 8
-    local bw, bh = 64, 18
+  -- Inline Edit pill inside selected component (visible only when selected)
+  if self.selected then
+    local sx = self.gui.x + self.selected.x
+    local sy = self.gui.y + self.selected.y
+    local bw, bh = 40, 16
+    local bx, by = sx + 6, sy + 6
     core.graphics.rect_2d_filled(constants.vec2.new(bx, by), bw, bh, constants.color.new(36,52,96,220), 4)
     core.graphics.rect_2d(constants.vec2.new(bx, by), bw, bh, constants.color.new(32,40,70,255), 1, 4)
     local label = "Edit"
@@ -487,8 +499,9 @@ function Designer:render(ox, oy)
     local ty = by + math.floor((bh - (constants.FONT_SIZE or 14)) / 2) - 1
     core.graphics.text_2d(label, constants.vec2.new(tx, ty), constants.FONT_SIZE, constants.color.white(255), false)
     if point_in_rect(m.x, m.y, bx, by, bw, bh) and constants.mouse_state.left_clicked then
-      self._edit_props_popup = not self._edit_props_popup
+      self._edit_props_popup = true
       self._props_x, self._props_y = bx, by + bh + 6
+      self._props_just_opened = true
     end
   end
 
@@ -559,9 +572,11 @@ function Designer:render(ox, oy)
       self._edit_props_popup = false
     end
     -- close if click outside
-    if constants.mouse_state.left_clicked and not point_in_rect(m.x, m.y, ex, ey, pw, ph) then
+    if not self._props_just_opened and constants.mouse_state.left_clicked and not point_in_rect(m.x, m.y, ex, ey, pw, ph) then
       self._edit_props_popup = false
     end
+    -- debounce: only for the first frame after opening
+    if self._props_just_opened then self._props_just_opened = false end
   end
 
   -- Export button moved to palette panel (see above)
