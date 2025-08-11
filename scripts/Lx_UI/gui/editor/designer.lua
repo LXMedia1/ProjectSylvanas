@@ -101,23 +101,32 @@ local function draw_component(comp, x, y)
 end
 
 function Designer:render(ox, oy)
-  local x = ox
-  local y = oy
-  local w = self.gui.width - 32
-  local h = self.gui.height - (oy + 28)
-  local canvas_x, canvas_y = x, y + 60
-  local canvas_w, canvas_h = w, h - 80
+  -- place everything INSIDE the tab content rect
+  local gx, gy = self.gui.x, self.gui.y
+  local base_x = gx + ox
+  local base_y = gy + oy
+  local content_w, content_h = 0, 0
+  if self.gui._tabs and self.gui._tabs.get_content_size then
+    content_w, content_h = self.gui._tabs:get_content_size()
+  else
+    content_w = self.gui.width - (ox + 16)
+    content_h = self.gui.height - (oy + 16)
+  end
+  local toolbar_h = 36
+  local palette_y = base_y + 8
+  local canvas_x, canvas_y = base_x, base_y + toolbar_h
+  local canvas_w, canvas_h = content_w, math.max(0, content_h - toolbar_h)
 
   -- Toolbar palette
-  local px = x
+  local px = base_x
   for i, d in ipairs(palette_defs) do
     local bw, bh = 90, 20
-    local over = point_in_rect(constants.mouse_state.position.x, constants.mouse_state.position.y, px, y + 28, bw, bh)
+    local over = point_in_rect(constants.mouse_state.position.x, constants.mouse_state.position.y, px, palette_y, bw, bh)
     local active = (self.active_tool == d.id)
     local bg = active and constants.color.new(86,120,200,230) or constants.color.new(36,52,96,220)
-    core.graphics.rect_2d_filled(constants.vec2.new(px, y + 28), bw, bh, bg, 4)
-    core.graphics.rect_2d(constants.vec2.new(px, y + 28), bw, bh, constants.color.new(32,40,70,255), 1, 4)
-    core.graphics.text_2d(d.name, constants.vec2.new(px + 8, y + 28 - 2), constants.Font_SIZE or constants.FONT_SIZE, constants.color.white(255), false)
+    core.graphics.rect_2d_filled(constants.vec2.new(px, palette_y), bw, bh, bg, 4)
+    core.graphics.rect_2d(constants.vec2.new(px, palette_y), bw, bh, constants.color.new(32,40,70,255), 1, 4)
+    core.graphics.text_2d(d.name, constants.vec2.new(px + 8, palette_y - 2), constants.Font_SIZE or constants.FONT_SIZE, constants.color.white(255), false)
     if over and constants.mouse_state.left_clicked then self.active_tool = d.id end
     px = px + bw + 6
   end
@@ -196,7 +205,7 @@ function Designer:render(ox, oy)
 
   -- Export button
   local ex_x = canvas_x + canvas_w - 120
-  local ex_y = y + 28
+  local ex_y = palette_y
   local bw, bh = 110, 20
   core.graphics.rect_2d_filled(constants.vec2.new(ex_x, ex_y), bw, bh, constants.color.new(86,120,200,230), 4)
   core.graphics.rect_2d(constants.vec2.new(ex_x, ex_y), bw, bh, constants.color.new(32,40,70,255), 1, 4)
