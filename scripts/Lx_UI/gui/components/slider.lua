@@ -123,13 +123,13 @@ function Slider:render()
         if core.graphics.rect_2d then
             core.graphics.rect_2d(constants.vec2.new(gx, gy), w, h, col_border, 1, 4)
         end
-        -- fill from bottom up
+        -- fill from TOP down (so dragging down increases value visually)
         if core.graphics.rect_2d_filled then
             local fh = math.floor(h * f)
-            core.graphics.rect_2d_filled(constants.vec2.new(gx, gy + h - fh), w, fh, col_fill, 4)
+            core.graphics.rect_2d_filled(constants.vec2.new(gx, gy), w, fh, col_fill, 4)
         end
-        -- knob
-        local ky = gy + h - math.floor(h * f) - 6
+        -- knob position follows fill from top
+        local ky = gy + math.floor(h * f) - 6
         local kx = gx - 2
         if core.graphics.rect_2d_filled then
             core.graphics.rect_2d_filled(constants.vec2.new(kx, ky), w + 4, 12, col_knob, 3)
@@ -142,7 +142,8 @@ function Slider:render()
         end
         if self.dragging then
             if constants.mouse_state.left_down then
-                local t = (gy + h - m.y) / h
+                -- increase value when dragging DOWN
+                local t = (m.y - gy) / h
                 if t < 0 then t = 0 elseif t > 1 then t = 1 end
                 local nv = lerp(self.min_value, self.max_value, t)
                 if not self.is_float then nv = math.floor(nv + 0.5) else
