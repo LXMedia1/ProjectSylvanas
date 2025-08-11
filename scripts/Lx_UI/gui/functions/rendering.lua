@@ -496,9 +496,10 @@ local function render_all()
             render_window(gui)
         end
     end
-    -- Draw launcher UI on top
-    -- handle launcher interactions
-    if (constants.launcher_mode or 1) == 3 then
+    -- Draw all launcher UIs that have items; default items appear only in the active launcher
+    -- Topbar
+    render_topbar()
+    do
         local mouse = constants.mouse_state.position
         for _, tab in ipairs(constants.topbar_tabs or {}) do
             local hovered = (mouse.x >= tab.x and mouse.x <= tab.x + tab.w and mouse.y >= tab.y and mouse.y <= tab.y + tab.h)
@@ -515,8 +516,10 @@ local function render_all()
                 end
             end
         end
-        render_topbar()
-    elseif (constants.launcher_mode or 1) == 2 then
+    end
+    -- Sidebar
+    render_sidebar()
+    do
         local mouse = constants.mouse_state.position
         for _, tab in ipairs(constants.sidebar_tabs or {}) do
             local hovered = (mouse.x >= tab.x and mouse.x <= tab.x + tab.w and mouse.y >= tab.y and mouse.y <= tab.y + tab.h)
@@ -533,8 +536,10 @@ local function render_all()
                 end
             end
         end
-        render_sidebar()
-    else
+    end
+    -- Palette
+    render_palette()
+    do
         local mouse = constants.mouse_state.position
         for _, ent in ipairs(constants.palette_entries or {}) do
             local hovered = (mouse.x >= ent.x and mouse.x <= ent.x + ent.w and mouse.y >= ent.y and mouse.y <= ent.y + ent.h)
@@ -551,7 +556,6 @@ local function render_all()
                 end
             end
         end
-        render_palette()
     end
     -- end-of-frame cleanup for listbox drag payload
     if not constants.mouse_state.left_down then
