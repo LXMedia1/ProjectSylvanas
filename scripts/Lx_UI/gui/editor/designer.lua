@@ -144,15 +144,18 @@ function Designer:render(ox, oy)
   do
     local col_bg = constants.color.new(14, 18, 30, 220)
     local col_bd = constants.color.new(32, 40, 70, 255)
-    core.graphics.rect_2d_filled(constants.vec2.new(palette_x, palette_y), palette_w, content_h, col_bg, 6)
-    core.graphics.rect_2d(constants.vec2.new(palette_x, palette_y), palette_w, content_h, col_bd, 1, 6)
+    -- reserve space below panel for Export button (outside the panel)
+    local export_h = 22
+    local export_gap = 8
+    local panel_h = math.max(0, content_h - export_h - export_gap)
+    core.graphics.rect_2d_filled(constants.vec2.new(palette_x, palette_y), palette_w, panel_h, col_bg, 6)
+    core.graphics.rect_2d(constants.vec2.new(palette_x, palette_y), palette_w, panel_h, col_bd, 1, 6)
     -- Title
     if core.graphics.text_2d then
       core.graphics.text_2d("Components", constants.vec2.new(palette_x + 10, palette_y + 6), constants.FONT_SIZE, constants.color.white(255), false)
     end
     local list_y = palette_y + 26
-    local bottom_reserved = 36 -- space for Export button
-    local list_y_limit = palette_y + content_h - bottom_reserved - 10
+    local list_y_limit = palette_y + panel_h - 10
     -- Build categories map
     local cats = {}
     for i = 1, #palette_defs do
@@ -204,14 +207,18 @@ function Designer:render(ox, oy)
       end
     end
 
-    -- Export button anchored under the component list (inside the palette panel)
+    -- Export button outside, just below the component panel
     do
-      local bw, bh = palette_w - 20, 20
+      local bw, bh = palette_w - 20, export_h
       local ex_x = palette_x + 10
-      local ex_y = palette_y + content_h - bh - 10
+      local ex_y = palette_y + panel_h + export_gap
       core.graphics.rect_2d_filled(constants.vec2.new(ex_x, ex_y), bw, bh, constants.color.new(86,120,200,230), 4)
       core.graphics.rect_2d(constants.vec2.new(ex_x, ex_y), bw, bh, col_bd, 1, 4)
-      core.graphics.text_2d("Export Lua", constants.vec2.new(ex_x + 14, ex_y - 2), constants.FONT_SIZE, constants.color.white(255), false)
+      local label = "Export Lua"
+      local tw = (core.graphics.get_text_width and core.graphics.get_text_width(label, constants.FONT_SIZE, 0)) or 60
+      local tx = ex_x + math.floor((bw - tw) / 2)
+      local ty = ex_y + math.floor((bh - (constants.FONT_SIZE or 14)) / 2) - 1
+      core.graphics.text_2d(label, constants.vec2.new(tx, ty), constants.FONT_SIZE, constants.color.white(255), false)
       if point_in_rect(constants.mouse_state.position.x, constants.mouse_state.position.y, ex_x, ex_y, bw, bh) and pressed then
         self:export()
       end
