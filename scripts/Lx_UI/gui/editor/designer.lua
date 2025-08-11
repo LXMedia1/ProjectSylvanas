@@ -53,7 +53,7 @@ function Designer:add_component(kind, x, y)
   if not def then return end
   local comp = {
     kind = def.id, x = x, y = y, w = def.w, h = def.h,
-    text = def.name, title = def.name,
+    text = def.name, title = def.name, multiline = false,
   }
   table.insert(self.components, comp)
   self.selected = comp
@@ -485,33 +485,14 @@ function Designer:render(ox, oy)
     end
   end
 
-  -- Inline Edit pill inside selected component (visible only when selected)
-  if self.selected then
-    local sx = self.gui.x + self.selected.x
-    local sy = self.gui.y + self.selected.y
-    local bw, bh = 40, 16
-    -- place just above the component so it doesn't overlap
-    local bx, by = sx + 6, sy - bh - 4
-    core.graphics.rect_2d_filled(constants.vec2.new(bx, by), bw, bh, constants.color.new(36,52,96,220), 4)
-    core.graphics.rect_2d(constants.vec2.new(bx, by), bw, bh, constants.color.new(32,40,70,255), 1, 4)
-    local label = "Edit"
-    local tw = (core.graphics.get_text_width and core.graphics.get_text_width(label, constants.FONT_SIZE, 0)) or 24
-    local tx = bx + math.floor((bw - tw) / 2)
-    local ty = by + math.floor((bh - (constants.FONT_SIZE or 14)) / 2) - 1
-    core.graphics.text_2d(label, constants.vec2.new(tx, ty), constants.FONT_SIZE, constants.color.white(255), false)
-    if point_in_rect(m.x, m.y, bx, by, bw, bh) and constants.mouse_state.left_clicked then
-      self._edit_props_popup = true
-      self._props_x, self._props_y = bx, by + bh + 6
-      self._props_just_opened = true
-    end
-  end
+  -- Inline Edit pill removed; edit is accessible from the context menu only
 
   -- Properties popup (simple controls)
   if self._edit_props_popup and self.selected then
     local ex = self._props_x or (canvas_x + 8)
     local ey = self._props_y or (canvas_y + 30)
     local pw = 220
-    local ph = 100
+    local ph = 128
     local bg = constants.color.new(16, 20, 34, 240)
     local bd = constants.color.new(32, 40, 70, 255)
     core.graphics.rect_2d_filled(constants.vec2.new(ex, ey), pw, ph, bg, 6)
@@ -519,33 +500,28 @@ function Designer:render(ox, oy)
     local y = ey + 6
     core.graphics.text_2d("Properties", constants.vec2.new(ex + 8, y), constants.FONT_SIZE, constants.color.white(255), false)
     y = y + 18
-    -- Text/title cycler for text-capable components
+    -- Text input field for text-capable components
     local k = self.selected.kind
     if k == "label" or k == "button" or k == "checkbox" or k == "combobox" or k == "panel" then
       core.graphics.text_2d("Text", constants.vec2.new(ex + 8, y), constants.FONT_SIZE, constants.color.white(255), false)
-      local bw, bh = 18, 16
-      local minus_x = ex + 60
-      local plus_x = ex + 60 + 60
-      local disp = self.selected.text or self.selected.title or ""
-      core.graphics.rect_2d_filled(constants.vec2.new(minus_x, y), bw, bh, constants.color.new(36,52,96,220), 4)
-      core.graphics.rect_2d_filled(constants.vec2.new(plus_x, y), bw, bh, constants.color.new(36,52,96,220), 4)
-      core.graphics.text_2d("-", constants.vec2.new(minus_x + 6, y - 2), constants.FONT_SIZE, constants.color.white(255), false)
-      core.graphics.text_2d("+", constants.vec2.new(plus_x + 5, y - 2), constants.FONT_SIZE, constants.color.white(255), false)
-      core.graphics.text_2d(disp, constants.vec2.new(ex + 84, y - 2), constants.FONT_SIZE, constants.color.white(255), false)
-      if point_in_rect(m.x, m.y, minus_x, y, bw, bh) and constants.mouse_state.left_clicked then
-        -- shorten text
-        local s = tostring(disp)
-        if #s > 0 then s = string.sub(s, 1, math.max(0, #s - 1)) end
-        if k == "panel" then self.selected.title = s else self.selected.text = s end
+      local input_x = ex + 60
+      local input_w = pw - 68
+      -- create once
+      if not self._props_text_input then
+        self._props_text_input = self.gui:AddInput(input_x - self.gui.x, y - self.gui.y, input_w, 20, { multiline = false, text = tostring(self.selected.text or self.selected.title or "") }, function(_, val)
+          if k == "panel" then self.selected.title = val else self.selected.text = val end
+        end)
+        self._props_text_input:set_visible_if(function() return self._edit_props_popup and self.selected ~= nil end)
       end
-      if point_in_rect(m.x, m.y, plus_x, y, bw, bh) and constants.mouse_state.left_clicked then
-        -- append placeholder character
-        local s = tostring(disp)
-        self._next_char = self._next_char or "*"
-        s = s .. self._next_char
-        if k == "panel" then self.selected.title = s else self.selected.text = s end
+      -- keep synced/positioned
+      self._props_text_input.x = input_x - self.gui.x
+      self._props_text_input.y = y - self.gui.y
+      self._props_text_input.w = input_w
+      local cur_disp = tostring(self.selected.text or self.selected.title or "")
+      if self._props_text_input:get_text() ~= cur_disp then
+        self._props_text_input:set_text(cur_disp)
       end
-      y = y + 22
+      y = y + 26
     end
     -- Width/Height steppers
     core.graphics.text_2d("Width", constants.vec2.new(ex + 8, y), constants.FONT_SIZE, constants.color.white(255), false)

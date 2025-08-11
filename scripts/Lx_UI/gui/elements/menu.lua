@@ -7,6 +7,7 @@ local Panel = require("gui/components/panel")
 local Listbox = require("gui/components/listbox")
 local Combobox = require("gui/components/combobox")
 local Slider = require("gui/components/slider")
+local Input = require("gui/components/input")
 
 local Menu = {}
 Menu.__index = Menu
@@ -107,6 +108,14 @@ function Menu:AddSlider(x, y, length, min_value, max_value, value, on_change, op
     self._sliders = self._sliders or {}
     table.insert(self._sliders, s)
     return s
+end
+
+-- Text Input. opts: { multiline=false, text="" }
+function Menu:AddInput(x, y, w, h, opts, on_change)
+    local ti = Input:new(self, x, y, w, h, opts, on_change)
+    self._text_inputs = self._text_inputs or {}
+    table.insert(self._text_inputs, ti)
+    return ti
 end
 
 return {
