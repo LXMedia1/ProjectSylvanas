@@ -18,6 +18,8 @@ function Input:new(owner_gui, x, y, w, h, opts, on_change)
   o.is_focused = false
   o._keys_down = {}
   o._caret_t = 0
+  o._proxy_id = "lxui_input_proxy_" .. tostring(owner_gui.unique_key or "gui") .. "_" .. tostring(o):gsub("[^%w]","_")
+  o._menu_text = nil
   return o
 end
 
@@ -141,6 +143,22 @@ function Input:render()
     end
   else
     self._caret_t = 0
+  end
+end
+
+-- Render a hidden core.menu.text_input to let the engine capture and block input while focused
+function Input:render_proxy_menu()
+  if not self.is_focused then return end
+  if core.menu and core.menu.text_input then
+    if not self._menu_text then
+      -- second arg save_input=false
+      self._menu_text = core.menu.text_input(self._proxy_id, false)
+    end
+    if self._menu_text and self._menu_text.render then
+      -- Render with empty label; this will keep core focus on a text box without showing anything
+      -- Some runtimes still draw a control; if so, it will be inside the menu tree node, not our canvas
+      self._menu_text:render("", "")
+    end
   end
 end
 
