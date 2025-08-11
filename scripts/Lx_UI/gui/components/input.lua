@@ -151,16 +151,20 @@ function Input:render()
     end
   else
     self._caret_t = 0
-    if self._movement_locked and core.input.disable_movement then
-      core.input.disable_movement(false)
-      self._movement_locked = false
-    end
   end
 end
 
 -- Render an invisible menu window exactly over the input to block clicks
 function Input:render_blocker()
-  if not (self.is_focused and self._blocker) then return end
+  -- If not focused or not visible/open, ensure movement is unlocked and do nothing
+  if (not self.is_focused) or (not (self.gui and self.gui.is_open)) or (self.visible_if and not self:is_visible()) then
+    if self._movement_locked and core.input and core.input.disable_movement then
+      core.input.disable_movement(false)
+      self._movement_locked = false
+    end
+    return
+  end
+  if not self._blocker then return end
   local bx = self.gui.x + self.x
   local by = self.gui.y + self.y
   if self._blocker.stop_forcing_size then self._blocker:stop_forcing_size() end
