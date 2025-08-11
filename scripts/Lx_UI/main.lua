@@ -163,6 +163,45 @@ local function on_update()
                         gui._default_launcher_combo.y = oy + 18
                     end
 
+                    -- Layout sliders for launcher offsets
+                    -- Sidebar Y slider (horizontal) and Palette Y (horizontal) + Palette X (vertical on the right)
+                    if not gui._sidebar_y_slider then
+                        gui._sidebar_y_slider = gui:AddSlider(ox + 260, oy + 18, 220, 0, (core.graphics.get_screen_size().y or 800) - 60, constants.SIDEBAR_TOP_OFFSET or 80, function(self, val)
+                            constants.SIDEBAR_TOP_OFFSET = val
+                            persist.save_plugin({
+                                sidebar_top_offset = constants.SIDEBAR_TOP_OFFSET or 80,
+                                palette_top_offset = constants.PALETTE_TOP_OFFSET or 120,
+                                palette_left_offset = constants.PALETTE_LEFT_OFFSET or 0,
+                                default_launcher = constants.__default_launcher or "sidebar"
+                            })
+                        end, { is_float = false })
+                        gui._palette_y_slider = gui:AddSlider(ox + 500, oy + 18, 220, 0, (core.graphics.get_screen_size().y or 800) - 60, constants.PALETTE_TOP_OFFSET or 120, function(self, val)
+                            constants.PALETTE_TOP_OFFSET = val
+                            persist.save_plugin({
+                                sidebar_top_offset = constants.SIDEBAR_TOP_OFFSET or 80,
+                                palette_top_offset = constants.PALETTE_TOP_OFFSET or 120,
+                                palette_left_offset = constants.PALETTE_LEFT_OFFSET or 0,
+                                default_launcher = constants.__default_launcher or "sidebar"
+                            })
+                        end, { is_float = false })
+                        gui._palette_x_slider = gui:AddSlider(ox + 740, oy + 18, 140, -math.floor((core.graphics.get_screen_size().x or 1200)/2), math.floor((core.graphics.get_screen_size().x or 1200)/2), constants.PALETTE_LEFT_OFFSET or 0, function(self, val)
+                            constants.PALETTE_LEFT_OFFSET = val
+                            persist.save_plugin({
+                                sidebar_top_offset = constants.SIDEBAR_TOP_OFFSET or 80,
+                                palette_top_offset = constants.PALETTE_TOP_OFFSET or 120,
+                                palette_left_offset = constants.PALETTE_LEFT_OFFSET or 0,
+                                default_launcher = constants.__default_launcher or "sidebar"
+                            })
+                        end, { vertical = true, is_float = false, thickness = 10 })
+                        gui._sidebar_y_slider:set_visible_if(function() return gui._tabs:is_active("Settings") end)
+                        gui._palette_y_slider:set_visible_if(function() return gui._tabs:is_active("Settings") end)
+                        gui._palette_x_slider:set_visible_if(function() return gui._tabs:is_active("Settings") end)
+                    else
+                        gui._sidebar_y_slider.x, gui._sidebar_y_slider.y = ox + 260, oy + 18
+                        gui._palette_y_slider.x, gui._palette_y_slider.y = ox + 500, oy + 18
+                        gui._palette_x_slider.x, gui._palette_x_slider.y = ox + 740, oy + 18
+                    end
+
                     -- Four listboxes: Default, Topbar, Sidebar, Palette
                     -- Build lists only once, then reuse
                     if not gui._lb_default then
@@ -272,9 +311,6 @@ end
 local function on_render_menu()
     if ui_tree and ui_tree.render then
         ui_tree:render("Lx_UI", function()
-            if launcher_mode_combo and launcher_mode_combo.render then
-                launcher_mode_combo:render("Launcher Mode", launcher_mode_options, "Choose how to open/manage GUIs")
-            end
             -- Settings window toggle
             if settings_open_checkbox and settings_open_checkbox.render then
                 settings_open_checkbox:render("Open Settings Window", "Show/Hide the Lx_UI Settings window")
@@ -288,74 +324,7 @@ local function on_render_menu()
                     end
                 end
             end
-            -- Sidebar offset slider
-            if constants.launcher_mode == 2 and core.menu and core.menu.slider_int then
-                if not sidebar_offset_slider then
-                    local max_y = 600
-                    if core.graphics and core.graphics.get_screen_size then
-                        local scr = core.graphics.get_screen_size()
-                        if scr and scr.y then max_y = math.max(100, scr.y - 100) end
-                    end
-                    local initial = constants.SIDEBAR_TOP_OFFSET or 80
-                    sidebar_offset_slider = core.menu.slider_int(0, max_y, initial, "lx_ui_sidebar_offset")
-                end
-                if sidebar_offset_slider and sidebar_offset_slider.render then
-                    sidebar_offset_slider:render("Sidebar Top Offset", "Move sidebar up/down")
-                    if sidebar_offset_slider.get then
-                        constants.SIDEBAR_TOP_OFFSET = sidebar_offset_slider:get()
-                    end
-                    persist.save_plugin({
-                        launcher_mode = constants.launcher_mode,
-                        sidebar_top_offset = constants.SIDEBAR_TOP_OFFSET or 80,
-                        palette_top_offset = constants.PALETTE_TOP_OFFSET or 120,
-                        palette_left_offset = constants.PALETTE_LEFT_OFFSET or 0
-                    })
-                end
-            end
-            -- Palette offset sliders (vertical and horizontal)
-            if constants.launcher_mode == 1 and core.menu and core.menu.slider_int then
-                if not palette_offset_slider then
-                    local max_y = 800
-                    if core.graphics and core.graphics.get_screen_size then
-                        local scr = core.graphics.get_screen_size()
-                        if scr and scr.y then max_y = math.max(100, scr.y - 60) end
-                    end
-                    local initial = constants.PALETTE_TOP_OFFSET or 120
-                    palette_offset_slider = core.menu.slider_int(0, max_y, initial, "lx_ui_palette_offset")
-                end
-                if palette_offset_slider and palette_offset_slider.render then
-                    palette_offset_slider:render("Palette Top Offset", "Move palette up/down")
-                    if palette_offset_slider.get then
-                        constants.PALETTE_TOP_OFFSET = palette_offset_slider:get()
-                    end
-                    persist.save_plugin({
-                        launcher_mode = constants.launcher_mode,
-                        sidebar_top_offset = constants.SIDEBAR_TOP_OFFSET or 80,
-                        palette_top_offset = constants.PALETTE_TOP_OFFSET or 120,
-                        palette_left_offset = constants.PALETTE_LEFT_OFFSET or 0
-                    })
-                end
-                if not palette_left_slider then
-                    local max_x = 800
-                    if core.graphics and core.graphics.get_screen_size then
-                        local scr = core.graphics.get_screen_size()
-                        if scr and scr.x then max_x = scr.x end
-                    end
-                    palette_left_slider = core.menu.slider_int(-math.floor(max_x/2), math.floor(max_x/2), constants.PALETTE_LEFT_OFFSET or 0, "lx_ui_palette_left")
-                end
-                if palette_left_slider and palette_left_slider.render then
-                    palette_left_slider:render("Palette Left/Right Offset", "Move palette left/right")
-                    if palette_left_slider.get then
-                        constants.PALETTE_LEFT_OFFSET = palette_left_slider:get()
-                    end
-                    persist.save_plugin({
-                        launcher_mode = constants.launcher_mode,
-                        sidebar_top_offset = constants.SIDEBAR_TOP_OFFSET or 80,
-                        palette_top_offset = constants.PALETTE_TOP_OFFSET or 120,
-                        palette_left_offset = constants.PALETTE_LEFT_OFFSET or 0
-                    })
-                end
-            end
+            -- Menu offsets removed; sliders are now inside Settings window
             -- Per-GUI enable/disable toggles
             for name, checkbox in pairs(constants.gui_states) do
                 if checkbox and checkbox.render then
