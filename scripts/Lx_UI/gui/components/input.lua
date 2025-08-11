@@ -18,6 +18,7 @@ function Input:new(owner_gui, x, y, w, h, opts, on_change)
   o.is_focused = false
   o._keys_down = {}
   o._caret_t = 0
+  o._last_click_t = 0
   -- invisible blocker window to stop click-through and help block game input while editing
   if core.menu and core.menu.window then
     local bid = "lx_ui_input_blocker_" .. tostring(owner_gui.unique_key or "gui") .. "_" .. tostring(math.random(1000000))
@@ -91,23 +92,26 @@ function Input:render()
   local m = constants.mouse_state.position
   local over = helpers.is_point_in_rect(m.x, m.y, gx, gy, w, h)
   if over and constants.mouse_state.left_clicked then
-    -- focus this input, blur others
-    self.is_focused = true
-    if self.gui._text_inputs then
-      for _, ti in ipairs(self.gui._text_inputs) do
-        if ti ~= self then ti.is_focused = false end
+    -- focus only on double-click
+    local now_t = (core.time and core.time()) or 0
+    local dt = now_t - (self._last_click_t or 0)
+    if dt >= 0 and dt <= 350 then
+      self.is_focused = true
+      constants.is_typing = true
+      if self.gui._text_inputs then
+        for _, ti in ipairs(self.gui._text_inputs) do
+          if ti ~= self then ti.is_focused = false end
+        end
       end
     end
+    self._last_click_t = now_t
   elseif constants.mouse_state.left_clicked and not over then
     self.is_focused = false
+    constants.is_typing = false
   end
 
   -- input handling when focused
-  if self.is_focused and core.input and core.graphics and core.graphics.translate_vkey_to_string then
-    if not self._movement_locked and core.input.disable_movement then
-      core.input.disable_movement(true)
-      self._movement_locked = true
-    end
+  if self.is_focused and core.graphics and core.graphics.translate_vkey_to_string then
     -- Enter handling
     local VK_RETURN = 0x0D
     if key_edge(self, VK_RETURN) then
@@ -116,6 +120,7 @@ function Input:render()
         if self.on_change then self.on_change(self, self.text) end
       else
         self.is_focused = false
+        constants.is_typing = false
       end
     end
     -- Backspace
@@ -156,31 +161,34 @@ function Input:render()
     end
   else
     self._caret_t = 0
+    -- ensure typing flag is reset on blur
+    if not self.is_focused then constants.is_typing = false end
   end
 end
 
 -- Render an invisible menu window exactly over the input to block clicks
 function Input:render_blocker()
-  -- If not focused or not visible/open, ensure movement is unlocked and do nothing
+  -- If not focused or not visible/open, do nothing
   if (not self.is_focused) or (not (self.gui and self.gui.is_open)) or (self.visible_if and not self:is_visible()) then
-    if self._movement_locked and core.input and core.input.disable_movement then
-      core.input.disable_movement(false)
-      self._movement_locked = false
-    end
     return
   end
   if not self._blocker then return end
-  local bx = self.gui.x + self.x
-  local by = self.gui.y + self.y
+  local bx = 0
+  local by = 0
+  local sw, sh = 0, 0
+  if core.graphics and core.graphics.get_screen_size then
+    local scr = core.graphics.get_screen_size()
+    sw, sh = scr.x or 0, scr.y or 0
+  end
   if self._blocker.stop_forcing_size then self._blocker:stop_forcing_size() end
   if self._blocker.force_next_begin_window_pos then
     self._blocker:force_next_begin_window_pos(constants.vec2.new(bx, by))
   end
   if self._blocker.set_next_window_min_size then
-    self._blocker:set_next_window_min_size(constants.vec2.new(self.w, self.h))
+    self._blocker:set_next_window_min_size(constants.vec2.new(sw > 0 and sw or (self.w), sh > 0 and sh or (self.h)))
   end
   if self._blocker.force_window_size then
-    self._blocker:force_window_size(constants.vec2.new(self.w, self.h))
+    self._blocker:force_window_size(constants.vec2.new(sw > 0 and sw or (self.w), sh > 0 and sh or (self.h)))
   end
   if self._blocker.set_background_multicolored then
     local c = constants.color.new(0,0,0,0)
@@ -198,11 +206,11 @@ function Input:render_blocker()
       0,
       function()
         if self._blocker.add_artificial_item_bounds then
-          self._blocker:add_artificial_item_bounds(constants.vec2.new(0,0), constants.vec2.new(self.w, self.h))
+          self._blocker:add_artificial_item_bounds(constants.vec2.new(0,0), constants.vec2.new(sw > 0 and sw or self.w, sh > 0 and sh or self.h))
         end
         -- render a hidden text_input to grab keyboard focus
         if self._menu_text and self._menu_text.render then
-          self._menu_text:render("", "")
+          self._menu_text:render(" ", " ")
         end
       end
     )
