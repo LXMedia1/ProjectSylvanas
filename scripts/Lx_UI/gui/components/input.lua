@@ -29,6 +29,7 @@ function Input:new(owner_gui, x, y, w, h, opts, on_change)
   -- backspace repeat state (ms)
   o._bs_prev_down = false
   o._bs_next_repeat = 0
+  o._force_focus_frames = 0
   -- small invisible menu window behind the input + a core text_input to grab focus
   if core.menu and core.menu.window then
     local bid = "lx_ui_input_blocker_" .. tostring(owner_gui.unique_key or "gui") .. "_" .. tostring(math.random(1000000))
@@ -175,6 +176,7 @@ function Input:render()
       constants.is_typing = true
       -- publish capture rect so menu can align hidden text_input reliably
       constants.typing_capture = { x = gx, y = gy, w = w, h = h }
+      self._force_focus_frames = 6
       if self.gui._text_inputs then
         for _, ti in ipairs(self.gui._text_inputs) do
           if ti ~= self then ti.is_focused = false end
@@ -334,6 +336,9 @@ function Input:render_proxy_menu()
   if self._blocker.force_next_begin_window_pos then
     self._blocker:force_next_begin_window_pos(constants.vec2.new(gx, gy))
   end
+  if self._force_focus_frames and self._force_focus_frames > 0 and self._blocker.set_focus then
+    self._blocker:set_focus()
+  end
   if self._blocker.set_next_window_min_size then
     self._blocker:set_next_window_min_size(constants.vec2.new(w, h))
   end
@@ -366,11 +371,14 @@ function Input:render_proxy_menu()
         if self._blocker.set_focus then self._blocker:set_focus() end
         if self._blocker.block_input_capture then self._blocker:block_input_capture() end
         if self._menu_text and self._menu_text.render then
-          -- Visible label ensures menu grabs focus; small content so it doesn't show under UI
-          self._menu_text:render(" ", "")
+          -- Render a standard, visible menu input so core definitely captures focus
+          self._menu_text:render("Focus", "")
         end
       end
     )
+  end
+  if self._force_focus_frames and self._force_focus_frames > 0 then
+    self._force_focus_frames = self._force_focus_frames - 1
   end
 end
 
