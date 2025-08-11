@@ -24,11 +24,21 @@ function Designer:new(owner_gui)
   o.dragging = false
   o.resizing = false
   o._mouse_was_down = false
+  -- drag-n-drop from palette state
+  o._palette_dragging = false
+  o._palette_drag_kind = nil
+  o._drag_w = 0
+  o._drag_h = 0
   return o
 end
 
 local function point_in_rect(px, py, x, y, w, h)
   return px >= x and px <= x + w and py >= y and py <= y + h
+end
+
+local function get_def(kind)
+  for _, d in ipairs(palette_defs) do if d.id == kind then return d end end
+  return nil
 end
 
 function Designer:add_component(kind, x, y)
@@ -129,6 +139,13 @@ function Designer:render(ox, oy)
     core.graphics.rect_2d(constants.vec2.new(px, palette_y), bw, bh, constants.color.new(32,40,70,255), 1, 4)
     core.graphics.text_2d(d.name, constants.vec2.new(px + 8, palette_y - 2), constants.Font_SIZE or constants.FONT_SIZE, constants.color.white(255), false)
     if over and constants.mouse_state.left_down then self.active_tool = d.id end
+    -- start drag from palette on click
+    if over and constants.mouse_state.left_clicked then
+      self._palette_dragging = true
+      self._palette_drag_kind = d.id
+      self._drag_w = d.w
+      self._drag_h = d.h
+    end
     px = px + bw + 6
   end
 
@@ -136,15 +153,45 @@ function Designer:render(ox, oy)
   core.graphics.rect_2d_filled(constants.vec2.new(canvas_x, canvas_y), canvas_w, canvas_h, constants.color.new(10, 12, 18, 160), 6)
   core.graphics.rect_2d(constants.vec2.new(canvas_x, canvas_y), canvas_w, canvas_h, constants.color.new(32,40,70,255), 1, 6)
 
-  -- Add component on click in empty area
   local m = constants.mouse_state.position
   local down = constants.mouse_state.left_down
   local pressed = (down and not self._mouse_was_down)
   local released = (self._mouse_was_down and not down)
   self._mouse_was_down = down
 
+  -- Handle palette drag-and-drop creation
+  if self._palette_dragging then
+    -- draw ghost of the component following the cursor
+    local gx = m.x - math.floor(self._drag_w / 2)
+    local gy = m.y - math.floor(self._drag_h / 2)
+    local ghost_bg = constants.color.new(20, 30, 50, 160)
+    local ghost_bd = constants.color.new(120, 190, 255, 230)
+    if core.graphics.rect_2d_filled then
+      core.graphics.rect_2d_filled(constants.vec2.new(gx, gy), self._drag_w, self._drag_h, ghost_bg, 6)
+    end
+    if core.graphics.rect_2d then
+      core.graphics.rect_2d(constants.vec2.new(gx, gy), self._drag_w, self._drag_h, ghost_bd, 1, 6)
+    end
+    if not down then
+      -- drop: create only if inside canvas
+      if point_in_rect(m.x, m.y, canvas_x, canvas_y, canvas_w, canvas_h) and self._palette_drag_kind then
+        local def = get_def(self._palette_drag_kind)
+        local cx = m.x - self.gui.x - math.floor((def and def.w or self._drag_w) / 2)
+        local cy = m.y - self.gui.y - math.floor((def and def.h or self._drag_h) / 2)
+        -- clamp to canvas bounds
+        cx = math.max(0, math.min(cx, (canvas_x + canvas_w) - self.gui.x - (def and def.w or self._drag_w)))
+        cy = math.max(0, math.min(cy, (canvas_y + canvas_h) - self.gui.y - (def and def.h or self._drag_h)))
+        self:add_component(self._palette_drag_kind, cx, cy)
+      end
+      self._palette_dragging = false
+      self._palette_drag_kind = nil
+      self._drag_w = 0
+      self._drag_h = 0
+    end
+  end
+
   if pressed then
-    -- first try hit test for existing components (resize handle preferred)
+    -- only selection / move / resize start (no spawn on click)
     local hit_any = false
     for i = #self.components, 1, -1 do
       local c = self.components[i]
@@ -164,16 +211,6 @@ function Designer:render(ox, oy)
         hit_any = true
         break
       end
-    end
-    if not hit_any and point_in_rect(m.x, m.y, canvas_x, canvas_y, canvas_w, canvas_h) then
-      -- add a new component at pointer
-      local cx = m.x - self.gui.x
-      local cy = m.y - self.gui.y
-      self:add_component(self.active_tool, cx, cy)
-      self.dragging = true
-      self.resizing = false
-      self._offx = 10
-      self._offy = 10
     end
   end
 

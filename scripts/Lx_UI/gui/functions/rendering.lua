@@ -164,6 +164,52 @@ local function render_window(gui)
         end
     end
 
+    -- Window resize handle (bottom-right). Disabled for fixed windows.
+    if not gui.is_fixed and core.graphics then
+        local handle_sz = 14
+        local hx = gui.x + gui.width - handle_sz
+        local hy = gui.y + gui.height - handle_sz
+        local mouse = constants.mouse_state.position
+        local over_handle = helpers.is_point_in_rect(mouse.x, mouse.y, hx, hy, handle_sz, handle_sz)
+        -- draw diagonal stripes as visual indicator
+        local line_col = constants.color.new(200, 220, 255, over_handle and 255 or 200)
+        if core.graphics.line_2d then
+            core.graphics.line_2d(constants.vec2.new(hx + 3, hy + handle_sz - 3), constants.vec2.new(hx + handle_sz - 3, hy + 3), line_col, 1)
+            core.graphics.line_2d(constants.vec2.new(hx + 1, hy + handle_sz - 1), constants.vec2.new(hx + handle_sz - 5, hy + 5), line_col, 1)
+            core.graphics.line_2d(constants.vec2.new(hx + 5, hy + handle_sz - 1), constants.vec2.new(hx + handle_sz - 1, hy + 5), line_col, 1)
+        end
+        -- interaction
+        gui._resizing = gui._resizing or false
+        if over_handle and constants.mouse_state.left_down and not gui._resizing then
+            gui._resizing = true
+            gui._resize_start_mx = mouse.x
+            gui._resize_start_my = mouse.y
+            gui._resize_start_w = gui.width
+            gui._resize_start_h = gui.height
+        end
+        if gui._resizing then
+            if constants.mouse_state.left_down then
+                local dx = mouse.x - (gui._resize_start_mx or mouse.x)
+                local dy = mouse.y - (gui._resize_start_my or mouse.y)
+                local min_w = math.max(220, 0)
+                local min_h = math.max((constants.HEADER_HEIGHT or 24) + 80, 120)
+                local new_w = math.max(min_w, (gui._resize_start_w or gui.width) + dx)
+                local new_h = math.max(min_h, (gui._resize_start_h or gui.height) + dy)
+                -- clamp to screen bounds
+                if core.graphics and core.graphics.get_screen_size then
+                    local screen = core.graphics.get_screen_size()
+                    new_w = math.min(new_w, screen.x - gui.x)
+                    new_h = math.min(new_h, screen.y - gui.y)
+                end
+                gui.width = new_w
+                gui.height = new_h
+            else
+                gui._resizing = false
+                if gui._on_after_move then gui._on_after_move() end
+            end
+        end
+    end
+
     -- Draw listbox drag ghost last so it appears above all GUI content
     if constants.listbox_drag and constants.listbox_drag.source and constants.listbox_drag.source.gui == gui then
         local ghost_text = tostring(constants.listbox_drag.text or "")
