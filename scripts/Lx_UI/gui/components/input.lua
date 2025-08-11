@@ -173,6 +173,8 @@ function Input:render()
     if dt >= 0 and dt <= 250 and dist2 <= 36 then
       self.is_focused = true
       constants.is_typing = true
+      -- publish capture rect so menu can align hidden text_input reliably
+      constants.typing_capture = { x = gx, y = gy, w = w, h = h }
       if self.gui._text_inputs then
         for _, ti in ipairs(self.gui._text_inputs) do
           if ti ~= self then ti.is_focused = false end
@@ -187,6 +189,7 @@ function Input:render()
   elseif constants.mouse_state.left_clicked and not over then
     self.is_focused = false
     constants.is_typing = false
+    constants.typing_capture = nil
   end
 
   -- input handling when focused
@@ -218,6 +221,7 @@ function Input:render()
       else
         self.is_focused = false
         constants.is_typing = false
+        constants.typing_capture = nil
       end
     end
     -- Backspace
@@ -312,7 +316,7 @@ function Input:render()
   else
     self._caret_t = 0
     -- ensure typing flag is reset on blur
-    if not self.is_focused then constants.is_typing = false end
+    if not self.is_focused then constants.is_typing = false; constants.typing_capture = nil end
   end
 end
 
@@ -324,6 +328,8 @@ function Input:render_proxy_menu()
   local gx = self.gui.x + self.x
   local gy = self.gui.y + self.y
   local w, h = self.w, self.h
+  -- keep global capture up to date for menu context consumers
+  constants.typing_capture = { x = gx, y = gy, w = w, h = h }
   if self._blocker.stop_forcing_size then self._blocker:stop_forcing_size() end
   if self._blocker.force_next_begin_window_pos then
     self._blocker:force_next_begin_window_pos(constants.vec2.new(gx, gy))
@@ -361,7 +367,7 @@ function Input:render_proxy_menu()
         if self._menu_text and self._menu_text.render then
           local t = self._menu_text
           if t.render_custom then
-            local tr = constants.color.new(0,0,0,0)
+            local tr = constants.color.new(1,1,1,1)
             t:render_custom("", "", tr, tr, tr, tr, 0)
           else
             -- fallback: tiny width and empty strings

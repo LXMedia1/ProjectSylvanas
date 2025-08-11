@@ -36,6 +36,11 @@ local mouse_state = {
     is_over_gui = false,
 }
 
+-- Global typing flag to gate input
+local is_typing = false
+-- active capture rect from inputs to position hidden menu text_input in menu context
+local typing_capture = nil
+
 return {
     color = color,
     vec2 = vec2,
@@ -52,6 +57,8 @@ return {
     listbox_drag = listbox_drag,
     listbox_drop_handled = listbox_drop_handled,
     mouse_state = mouse_state,
+    is_typing = is_typing,
+    typing_capture = typing_capture,
     launcher_mode = 1, -- 1=palette, 2=sidebar, 3=topbar
     -- Common layout
     HEADER_HEIGHT = 24,

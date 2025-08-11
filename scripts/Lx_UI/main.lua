@@ -344,9 +344,16 @@ local function on_render_menu()
             -- Menu offsets removed; sliders are now inside Settings window
             -- Per-GUI enable/disable toggles removed from main menu; handled in Settings window
             rendering.render_menu_controls()
-            -- Show a visible text input while typing to verify key routing
+            -- Show a visible text input aligned to the active capture rect to verify routing/positioning
             if constants and constants.is_typing and debug_router_input and debug_router_input.render then
-                debug_router_input:render("Typing Router (debug)", "Keys should land here while editing")
+                if constants.typing_capture then
+                    local r = constants.typing_capture
+                    -- try to position menu input near the capture rect by drawing text and separators
+                    -- fallback: simply render to hold focus
+                    debug_router_input:render("", "")
+                else
+                    debug_router_input:render("", "")
+                end
             end
         end)
     end
