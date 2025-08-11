@@ -163,10 +163,22 @@ local function on_update()
                         gui._default_launcher_combo.y = oy + 18
                     end
 
-                    -- Layout sliders for launcher offsets
-                    -- Sidebar Y slider (horizontal) and Palette Y (horizontal) + Palette X (vertical on the right)
+                    -- Layout sliders for launcher offsets with labels
+                    -- Sidebar Y (horizontal), Palette Y (horizontal), Palette X (vertical)
+                    local control_y = oy + 18
+                    local s1x = ox + 260
+                    local s2x = ox + 520
+                    local s3x = ox + 800
                     if not gui._sidebar_y_slider then
-                        gui._sidebar_y_slider = gui:AddSlider(ox + 260, oy + 18, 220, 0, (core.graphics.get_screen_size().y or 800) - 60, constants.SIDEBAR_TOP_OFFSET or 80, function(self, val)
+                        -- labels
+                        gui._lbl_sidebar_y = gui:AddLabel("Sidebar Offset (Y)", s1x, control_y - 14, constants.color.white(240), 12)
+                        gui._lbl_palette_y = gui:AddLabel("Palette Offset (Y)", s2x, control_y - 14, constants.color.white(240), 12)
+                        gui._lbl_palette_x = gui:AddLabel("Palette Offset (X)", s3x, control_y - 14, constants.color.white(240), 12)
+                        gui._lbl_sidebar_y:set_visible_if(function() return gui._tabs:is_active("Settings") end)
+                        gui._lbl_palette_y:set_visible_if(function() return gui._tabs:is_active("Settings") end)
+                        gui._lbl_palette_x:set_visible_if(function() return gui._tabs:is_active("Settings") end)
+
+                        gui._sidebar_y_slider = gui:AddSlider(s1x, control_y, 220, 0, (core.graphics.get_screen_size().y or 800) - 60, constants.SIDEBAR_TOP_OFFSET or 80, function(self, val)
                             constants.SIDEBAR_TOP_OFFSET = val
                             persist.save_plugin({
                                 sidebar_top_offset = constants.SIDEBAR_TOP_OFFSET or 80,
@@ -175,7 +187,7 @@ local function on_update()
                                 default_launcher = constants.__default_launcher or "sidebar"
                             })
                         end, { is_float = false })
-                        gui._palette_y_slider = gui:AddSlider(ox + 500, oy + 18, 220, 0, (core.graphics.get_screen_size().y or 800) - 60, constants.PALETTE_TOP_OFFSET or 120, function(self, val)
+                        gui._palette_y_slider = gui:AddSlider(s2x, control_y, 220, 0, (core.graphics.get_screen_size().y or 800) - 60, constants.PALETTE_TOP_OFFSET or 120, function(self, val)
                             constants.PALETTE_TOP_OFFSET = val
                             persist.save_plugin({
                                 sidebar_top_offset = constants.SIDEBAR_TOP_OFFSET or 80,
@@ -184,7 +196,7 @@ local function on_update()
                                 default_launcher = constants.__default_launcher or "sidebar"
                             })
                         end, { is_float = false })
-                        gui._palette_x_slider = gui:AddSlider(ox + 740, oy + 18, 140, -math.floor((core.graphics.get_screen_size().x or 1200)/2), math.floor((core.graphics.get_screen_size().x or 1200)/2), constants.PALETTE_LEFT_OFFSET or 0, function(self, val)
+                        gui._palette_x_slider = gui:AddSlider(s3x, control_y, 140, -math.floor((core.graphics.get_screen_size().x or 1200)/2), math.floor((core.graphics.get_screen_size().x or 1200)/2), constants.PALETTE_LEFT_OFFSET or 0, function(self, val)
                             constants.PALETTE_LEFT_OFFSET = val
                             persist.save_plugin({
                                 sidebar_top_offset = constants.SIDEBAR_TOP_OFFSET or 80,
@@ -197,9 +209,12 @@ local function on_update()
                         gui._palette_y_slider:set_visible_if(function() return gui._tabs:is_active("Settings") end)
                         gui._palette_x_slider:set_visible_if(function() return gui._tabs:is_active("Settings") end)
                     else
-                        gui._sidebar_y_slider.x, gui._sidebar_y_slider.y = ox + 260, oy + 18
-                        gui._palette_y_slider.x, gui._palette_y_slider.y = ox + 500, oy + 18
-                        gui._palette_x_slider.x, gui._palette_x_slider.y = ox + 740, oy + 18
+                        gui._lbl_sidebar_y.x, gui._lbl_sidebar_y.y = s1x, control_y - 14
+                        gui._lbl_palette_y.x, gui._lbl_palette_y.y = s2x, control_y - 14
+                        gui._lbl_palette_x.x, gui._lbl_palette_x.y = s3x, control_y - 14
+                        gui._sidebar_y_slider.x, gui._sidebar_y_slider.y = s1x, control_y
+                        gui._palette_y_slider.x, gui._palette_y_slider.y = s2x, control_y
+                        gui._palette_x_slider.x, gui._palette_x_slider.y = s3x, control_y
                     end
 
                     -- Four listboxes: Default, Topbar, Sidebar, Palette
