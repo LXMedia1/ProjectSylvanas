@@ -177,23 +177,27 @@ function Listbox:render()
                     constants.launcher_assignments[payload.text] = self.drop_slot
                 end
                 -- Remove from source items array if present
-                if payload.source and payload.source.items then
+                if payload and payload.source and payload.source.items then
                     for si = #payload.source.items, 1, -1 do
-                        if tostring(payload.source.items[si]) == tostring(payload.text) then
+                        if tostring(payload.source.items[si]) == tostring(payload.text or "") then
                             table.remove(payload.source.items, si)
                             break
                         end
                     end
                 end
                 -- Deduplicate in target then insert
-                for ti = #self.items, 1, -1 do
-                    if tostring(self.items[ti]) == tostring(payload.text) then
-                        table.remove(self.items, ti)
+                if self.items then
+                    for ti = #self.items, 1, -1 do
+                        if tostring(self.items[ti]) == tostring(payload and payload.text or "") then
+                            table.remove(self.items, ti)
+                        end
                     end
+                    table.insert(self.items, tostring(payload and payload.text or ""))
                 end
-                table.insert(self.items, payload.text)
                 -- Notify listeners
-                if self.on_change then self.on_change(self, nil, payload.text) end
+                if self.on_change and payload then self.on_change(self, nil, payload.text) end
+                -- Persist assignment change immediately via window save utility if available
+                if _G and _G.Lx_UI and _G.Lx_UI._persist_assignments then _G.Lx_UI._persist_assignments() end
                 constants.listbox_drop_handled = true
                 if core and core.log then core.log("[Lx_UI] Listbox dropped '" .. tostring(payload.text) .. "' into '" .. (self.title or "") .. "'") end
             end

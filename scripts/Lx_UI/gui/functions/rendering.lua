@@ -66,6 +66,7 @@ local function render_window(gui)
                 gui.y = new_y
             else
                 gui._dragging = false
+                if gui._on_after_move then gui._on_after_move() end
             end
         end
     end

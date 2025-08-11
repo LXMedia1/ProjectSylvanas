@@ -3,6 +3,7 @@
 -- Imports (module-local, no globals exposed yet)
 local constants = require("gui/utils/constants")
 local helpers = require("gui/utils/helpers")
+local persist = require("gui/utils/persist")
 local input = require("gui/functions/input")
 local rendering = require("gui/functions/rendering")
 local menu_module = require("gui/elements/menu")
@@ -18,9 +19,25 @@ local launcher_mode_combo = (core.menu and core.menu.combobox) and core.menu.com
 local sidebar_offset_slider = nil
 local palette_offset_slider = nil
 local palette_left_slider = nil
+local plugin_cfg_loaded = false
 
 -- Update loop
 local function on_update()
+    -- Ensure data folders
+    persist.ensure_dirs()
+    -- Load plugin settings once
+    if not plugin_cfg_loaded then
+        local cfg = persist.load_plugin() or {}
+        if tonumber(cfg.launcher_mode) then constants.launcher_mode = tonumber(cfg.launcher_mode) end
+        if tonumber(cfg.sidebar_top_offset) then constants.SIDEBAR_TOP_OFFSET = tonumber(cfg.sidebar_top_offset) end
+        if tonumber(cfg.palette_top_offset) then constants.PALETTE_TOP_OFFSET = tonumber(cfg.palette_top_offset) end
+        if tonumber(cfg.palette_left_offset) then constants.PALETTE_LEFT_OFFSET = tonumber(cfg.palette_left_offset) end
+        -- Reflect combobox if available
+        if launcher_mode_combo and launcher_mode_combo.set then
+            launcher_mode_combo:set(constants.launcher_mode or 1)
+        end
+        plugin_cfg_loaded = true
+    end
     -- Ensure a copy of logo is present in scripts_data/ressource/logo.png for binary loading
     if core.read_file and core.create_data_folder and core.create_data_file and core.write_data_file and not _G.__lxui_logo_copied then
         local raw_paths = {
@@ -187,6 +204,12 @@ local function on_update()
         else
             constants.launcher_mode = 1
         end
+        persist.save_plugin({
+            launcher_mode = constants.launcher_mode,
+            sidebar_top_offset = constants.SIDEBAR_TOP_OFFSET or 80,
+            palette_top_offset = constants.PALETTE_TOP_OFFSET or 120,
+            palette_left_offset = constants.PALETTE_LEFT_OFFSET or 0
+        })
     else
         constants.launcher_mode = constants.launcher_mode or 1
     end
@@ -263,6 +286,12 @@ local function on_render_menu()
                     if sidebar_offset_slider.get then
                         constants.SIDEBAR_TOP_OFFSET = sidebar_offset_slider:get()
                     end
+                    persist.save_plugin({
+                        launcher_mode = constants.launcher_mode,
+                        sidebar_top_offset = constants.SIDEBAR_TOP_OFFSET or 80,
+                        palette_top_offset = constants.PALETTE_TOP_OFFSET or 120,
+                        palette_left_offset = constants.PALETTE_LEFT_OFFSET or 0
+                    })
                 end
             end
             -- Palette offset sliders (vertical and horizontal)
@@ -281,6 +310,12 @@ local function on_render_menu()
                     if palette_offset_slider.get then
                         constants.PALETTE_TOP_OFFSET = palette_offset_slider:get()
                     end
+                    persist.save_plugin({
+                        launcher_mode = constants.launcher_mode,
+                        sidebar_top_offset = constants.SIDEBAR_TOP_OFFSET or 80,
+                        palette_top_offset = constants.PALETTE_TOP_OFFSET or 120,
+                        palette_left_offset = constants.PALETTE_LEFT_OFFSET or 0
+                    })
                 end
                 if not palette_left_slider then
                     local max_x = 800
@@ -295,6 +330,12 @@ local function on_render_menu()
                     if palette_left_slider.get then
                         constants.PALETTE_LEFT_OFFSET = palette_left_slider:get()
                     end
+                    persist.save_plugin({
+                        launcher_mode = constants.launcher_mode,
+                        sidebar_top_offset = constants.SIDEBAR_TOP_OFFSET or 80,
+                        palette_top_offset = constants.PALETTE_TOP_OFFSET or 120,
+                        palette_left_offset = constants.PALETTE_LEFT_OFFSET or 0
+                    })
                 end
             end
             -- Per-GUI enable/disable toggles
@@ -312,10 +353,34 @@ end
 local Lx_UI = {
     Menu = Menu,
     register = function(name, width, height, unique_key)
-        return Menu:new(name, width, height, unique_key)
+        local gui = Menu:new(name, width, height, unique_key)
+        -- Load per-window settings
+        local cfg = persist.load_window(gui)
+        if cfg.x then gui.x = tonumber(cfg.x) or gui.x end
+        if cfg.y then gui.y = tonumber(cfg.y) or gui.y end
+        if cfg.width then gui.width = tonumber(cfg.width) or gui.width end
+        if cfg.height then gui.height = tonumber(cfg.height) or gui.height end
+        if cfg.is_open ~= nil then gui.is_open = not not cfg.is_open end
+        if cfg.slot and name ~= "Lx_UI Settings" then
+            constants.launcher_assignments[name] = tostring(cfg.slot)
+        end
+
+        -- Hook movement save on next frame when dragging ends (handled in rendering via flags)
+        gui._on_after_move = function()
+            persist.save_window(gui)
+        end
+        return gui
     end,
     isInputBlocked = function()
         return helpers.is_input_blocked()
+    end,
+    _persist_assignments = function()
+        -- Save per-window files reflecting current assignments and window states
+        for name, gui in pairs(constants.registered_guis) do
+            if name ~= "Lx_UI Settings" then
+                persist.save_window(gui)
+            end
+        end
     end
 }
 
