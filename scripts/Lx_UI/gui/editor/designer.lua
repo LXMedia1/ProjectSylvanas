@@ -35,6 +35,12 @@ function Designer:new(owner_gui)
   o._ctx_x, o._ctx_y = 0, 0
   o._ctx_target = nil
   o._edit_size_popup = false
+  -- double-click + inline edit state
+  o._last_click_t = 0
+  o._last_click_target = nil
+  o._inline_input = nil
+  o._inline_edit_active = false
+  o._inline_just_opened = false
   return o
 end
 
@@ -291,6 +297,33 @@ function Designer:render(ox, oy)
         self.resize_corner = nil
         self._offx = m.x - cx
         self._offy = m.y - cy
+        -- double-click to inline edit for text-capable components
+        local now_t = (core.time and core.time()) or 0
+        local dt = now_t - (self._last_click_t or 0)
+        if self._last_click_target == c and dt >= 0 and dt <= 350 then
+          local k = c.kind
+          if k == "label" or k == "button" or k == "checkbox" or k == "combobox" or k == "panel" or k == "input" then
+            if not self._inline_input then
+              local ix = c.x + 4
+              local iy = c.y + math.max(0, math.floor((c.h - 20) / 2))
+              self._inline_input = self.gui:AddInput(ix, iy, math.max(60, c.w - 8), 20, { multiline = false, text = tostring(c.text or c.title or "") }, function(_, val)
+                if k == "panel" then c.title = val else c.text = val end
+              end)
+              self._inline_input:set_visible_if(function() return self._inline_edit_active end)
+            end
+            -- position and show
+            self._inline_input.x = c.x + 4
+            self._inline_input.y = c.y + math.max(0, math.floor((c.h - 20) / 2))
+            self._inline_input.w = math.max(60, c.w - 8)
+            local cur_disp = tostring(c.text or c.title or "")
+            self._inline_input:set_text(cur_disp)
+            self._inline_input.is_focused = true
+            self._inline_edit_active = true
+            self._inline_just_opened = true
+          end
+        end
+        self._last_click_t = now_t
+        self._last_click_target = c
         hit_any = true
         break
       end
@@ -504,6 +537,14 @@ function Designer:render(ox, oy)
     end
     -- debounce: only for the first frame after opening
     if self._props_just_opened then self._props_just_opened = false end
+  end
+
+  -- Close inline edit when it loses focus and user clicks elsewhere
+  if self._inline_edit_active and self._inline_input then
+    if not self._inline_just_opened and not self._inline_input.is_focused and (constants.mouse_state.left_clicked or constants.mouse_state.right_clicked) then
+      self._inline_edit_active = false
+    end
+    if self._inline_just_opened then self._inline_just_opened = false end
   end
 
   -- Export button moved to palette panel (see above)
