@@ -361,6 +361,13 @@ local Lx_UI = {
         if cfg.width then gui.width = tonumber(cfg.width) or gui.width end
         if cfg.height then gui.height = tonumber(cfg.height) or gui.height end
         if cfg.is_open ~= nil then gui.is_open = not not cfg.is_open end
+        -- restore launcher enable checkbox state
+        if cfg.enabled ~= nil then
+            local chk = constants.gui_states[name]
+            if chk and chk.set then
+                chk:set(not not cfg.enabled)
+            end
+        end
         if cfg.slot and name ~= "Lx_UI Settings" then
             constants.launcher_assignments[name] = tostring(cfg.slot)
         end

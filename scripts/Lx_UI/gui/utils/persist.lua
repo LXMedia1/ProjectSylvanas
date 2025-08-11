@@ -115,13 +115,19 @@ function Persist.save_window(gui, extra)
     if gui.is_settings then return end
     local path = window_file_for(gui)
     local snapshot = last_window_snapshots[path]
+    local enabled = true
+    local chk = constants.gui_states and constants.gui_states[gui.name]
+    if chk then
+        if chk.get_state then enabled = not not chk:get_state() elseif chk.get then enabled = not not chk:get() end
+    end
     local cfg = {
         x = gui.x,
         y = gui.y,
         width = gui.width,
         height = gui.height,
         is_open = not not gui.is_open,
-        slot = (constants.launcher_assignments and constants.launcher_assignments[gui.name]) or "default"
+        slot = (constants.launcher_assignments and constants.launcher_assignments[gui.name]) or "default",
+        enabled = enabled
     }
     if extra then
         for k, v in pairs(extra) do cfg[k] = v end

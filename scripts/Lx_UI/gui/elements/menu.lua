@@ -39,6 +39,20 @@ function Menu:new(name, width, height, unique_key)
         local id = "lx_ui_gui_enabled_" .. (name:lower():gsub("%s+", "_"))
         constants.gui_states[name] = core.menu.checkbox(true, id)
     end
+    -- expose a helper to persist when checkbox toggled, if API supports callbacks
+    if constants.gui_states[name] and constants.gui_states[name].render then
+        local orig_render = constants.gui_states[name].render
+        constants.gui_states[name].render = function(self, label, tooltip)
+            local before = nil
+            if self.get_state then before = self:get_state() elseif self.get then before = self:get() end
+            orig_render(self, label, tooltip)
+            local after = nil
+            if self.get_state then after = self:get_state() elseif self.get then after = self:get() end
+            if before ~= after and _G and _G.Lx_UI and _G.Lx_UI._persist_assignments then
+                _G.Lx_UI._persist_assignments()
+            end
+        end
+    end
     return gui
 end
 

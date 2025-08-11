@@ -515,6 +515,7 @@ local function render_all()
                         tab.gui.is_open = true
                     end
                 end
+                if _G and _G.Lx_UI and _G.Lx_UI._persist_assignments then _G.Lx_UI._persist_assignments() end
             end
         end
     end
@@ -535,6 +536,7 @@ local function render_all()
                         tab.gui.is_open = true
                     end
                 end
+                if _G and _G.Lx_UI and _G.Lx_UI._persist_assignments then _G.Lx_UI._persist_assignments() end
             end
         end
     end
@@ -555,6 +557,7 @@ local function render_all()
                         ent.gui.is_open = true
                     end
                 end
+                if _G and _G.Lx_UI and _G.Lx_UI._persist_assignments then _G.Lx_UI._persist_assignments() end
             end
         end
     end
