@@ -342,22 +342,7 @@ local function on_render_menu()
                 end
             end
             -- Menu offsets removed; sliders are now inside Settings window
-            -- Per-GUI enable/disable toggles
-            for name, checkbox in pairs(constants.gui_states) do
-                if checkbox and checkbox.render then
-                    local before = nil
-                    if checkbox.get_state then before = checkbox:get_state() elseif checkbox.get then before = checkbox:get() end
-                    checkbox:render("Enable " .. tostring(name), "Show/hide this GUI window")
-                    local after = nil
-                    if checkbox.get_state then after = checkbox:get_state() elseif checkbox.get then after = checkbox:get() end
-                    if before ~= after then
-                        -- Persist enabled state with window files
-                        if constants.registered_guis[name] then
-                            persist.save_window(constants.registered_guis[name])
-                        end
-                    end
-                end
-            end
+            -- Per-GUI enable/disable toggles removed from main menu; handled in Settings window
             rendering.render_menu_controls()
         end)
     end
