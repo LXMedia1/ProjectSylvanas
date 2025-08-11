@@ -508,6 +508,16 @@ local function render_all()
     -- reset drag flags at frame start (will be set by listboxes on drop)
     constants.listbox_drop_handled = false
 
+    -- Early pass: hide any lingering input blockers for GUIs that are closed or inputs not active
+    for _, g in pairs(constants.registered_guis) do
+        if g and g._text_inputs then
+            for i = 1, #g._text_inputs do
+                local ti = g._text_inputs[i]
+                if ti and ti.ensure_hidden_if_inactive then ti:ensure_hidden_if_inactive() end
+            end
+        end
+    end
+
     -- Render an invisible blocking window under EACH open & enabled GUI to prevent click-through
     if core.menu and core.menu.window then
         for name, gui in pairs(constants.registered_guis) do

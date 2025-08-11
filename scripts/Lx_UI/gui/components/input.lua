@@ -229,6 +229,13 @@ function Input:render()
       self._caret = clamp(index_from_mouse(self.text or "", x_rel, y_rel), 0, #(self.text or ""))
     elseif released then
       self._is_selecting = false
+      -- if caret interaction ended and we are no longer focused, hide blocker quickly
+      if not self.is_focused then
+        constants.is_typing = false
+        constants.typing_capture = nil
+        self._pre_focus_active = false
+        if self._blocker and self._blocker.set_visibility then self._blocker:set_visibility(false) end
+      end
     end
     -- Enter handling
     local VK_RETURN = 0x0D
