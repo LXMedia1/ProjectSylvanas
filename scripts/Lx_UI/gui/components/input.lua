@@ -362,17 +362,12 @@ function Input:render_proxy_menu()
       0,
       function()
         -- Ensure input capture in this small window
-        if self._blocker.set_next_widget_width then self._blocker:set_next_widget_width(1) end
+        if self._blocker.set_next_widget_width then self._blocker:set_next_widget_width(w) end
+        if self._blocker.set_focus then self._blocker:set_focus() end
         if self._blocker.block_input_capture then self._blocker:block_input_capture() end
         if self._menu_text and self._menu_text.render then
-          local t = self._menu_text
-          if t.render_custom then
-            local tr = constants.color.new(1,1,1,1)
-            t:render_custom("", "", tr, tr, tr, tr, 0)
-          else
-            -- fallback: tiny width and empty strings
-            t:render("", "")
-          end
+          -- Visible label ensures menu grabs focus; small content so it doesn't show under UI
+          self._menu_text:render(" ", "")
         end
       end
     )
