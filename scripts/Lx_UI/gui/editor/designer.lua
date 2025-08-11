@@ -23,6 +23,7 @@ function Designer:new(owner_gui)
   o.active_tool = "button"
   o.dragging = false
   o.resizing = false
+  o._mouse_was_down = false
   return o
 end
 
@@ -127,7 +128,7 @@ function Designer:render(ox, oy)
     core.graphics.rect_2d_filled(constants.vec2.new(px, palette_y), bw, bh, bg, 4)
     core.graphics.rect_2d(constants.vec2.new(px, palette_y), bw, bh, constants.color.new(32,40,70,255), 1, 4)
     core.graphics.text_2d(d.name, constants.vec2.new(px + 8, palette_y - 2), constants.Font_SIZE or constants.FONT_SIZE, constants.color.white(255), false)
-    if over and constants.mouse_state.left_clicked then self.active_tool = d.id end
+    if over and constants.mouse_state.left_down then self.active_tool = d.id end
     px = px + bw + 6
   end
 
@@ -137,16 +138,42 @@ function Designer:render(ox, oy)
 
   -- Add component on click in empty area
   local m = constants.mouse_state.position
-  if constants.mouse_state.left_clicked and point_in_rect(m.x, m.y, canvas_x, canvas_y, canvas_w, canvas_h) then
-    local hit = false
+  local down = constants.mouse_state.left_down
+  local pressed = (down and not self._mouse_was_down)
+  local released = (self._mouse_was_down and not down)
+  self._mouse_was_down = down
+
+  if pressed then
+    -- first try hit test for existing components (resize handle preferred)
+    local hit_any = false
     for i = #self.components, 1, -1 do
       local c = self.components[i]
-      if point_in_rect(m.x, m.y, self.gui.x + c.x, self.gui.y + c.y, c.w, c.h) then hit = true break end
+      local cx, cy = self.gui.x + c.x, self.gui.y + c.y
+      if point_in_rect(m.x, m.y, cx + c.w - 10, cy + c.h - 10, 10, 10) then
+        self.selected = c
+        self.resizing = true
+        self.dragging = false
+        hit_any = true
+        break
+      elseif point_in_rect(m.x, m.y, cx, cy, c.w, c.h) then
+        self.selected = c
+        self.dragging = true
+        self.resizing = false
+        self._offx = m.x - cx
+        self._offy = m.y - cy
+        hit_any = true
+        break
+      end
     end
-    if not hit then
+    if not hit_any and point_in_rect(m.x, m.y, canvas_x, canvas_y, canvas_w, canvas_h) then
+      -- add a new component at pointer
       local cx = m.x - self.gui.x
       local cy = m.y - self.gui.y
       self:add_component(self.active_tool, cx, cy)
+      self.dragging = true
+      self.resizing = false
+      self._offx = 10
+      self._offy = 10
     end
   end
 
@@ -170,7 +197,7 @@ function Designer:render(ox, oy)
   if self.selected then
     self.selected.__selected = true
     if self.dragging then
-      if constants.mouse_state.left_down then
+      if down then
         if self.resizing then
           local nw = (m.x - self.gui.x) - self.selected.x
           local nh = (m.y - self.gui.y) - self.selected.y
@@ -210,7 +237,7 @@ function Designer:render(ox, oy)
   core.graphics.rect_2d_filled(constants.vec2.new(ex_x, ex_y), bw, bh, constants.color.new(86,120,200,230), 4)
   core.graphics.rect_2d(constants.vec2.new(ex_x, ex_y), bw, bh, constants.color.new(32,40,70,255), 1, 4)
   core.graphics.text_2d("Export Lua", constants.vec2.new(ex_x + 14, ex_y - 2), constants.FONT_SIZE, constants.color.white(255), false)
-  if point_in_rect(m.x, m.y, ex_x, ex_y, bw, bh) and constants.mouse_state.left_clicked then
+  if point_in_rect(m.x, m.y, ex_x, ex_y, bw, bh) and pressed then
     self:export()
   end
 end
@@ -232,6 +259,7 @@ function Designer:export()
   table.insert(lines, "  local UI = _G.Lx_UI\n")
   table.insert(lines, "  if not UI then return end\n")
   table.insert(lines, "  local gui = UI.register(\"Exported UI\", 600, 400, \"exported_ui\")\n")
+  table.insert(lines, "  gui.is_open = true\n")
   -- emit creation calls
   local btn_index = 0
   for i = 1, #self.components do
