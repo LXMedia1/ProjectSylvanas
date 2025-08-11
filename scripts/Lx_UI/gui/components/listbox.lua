@@ -120,6 +120,21 @@ function Listbox:render()
     end
 
     local mouse = constants.mouse_state.position
+    local is_dragging = constants.listbox_drag ~= nil
+    local same_type_drag = is_dragging and constants.listbox_drag.type_id ~= nil and self.type_id ~= nil and constants.listbox_drag.type_id == self.type_id
+    local over_listbox = (mouse.x >= gx and mouse.x <= gx + gw and mouse.y >= gy and mouse.y <= gy + gh)
+
+    -- Visualize potential drop target when dragging a compatible item
+    if same_type_drag and over_listbox then
+        local col_drop_border = constants.color.new(120, 200, 255, 255)
+        local col_drop_fill = constants.color.new(80, 120, 200, 40)
+        if core.graphics.rect_2d_filled then
+            core.graphics.rect_2d_filled(constants.vec2.new(gx + 2, gy + 2), gw - 4, gh - 4, col_drop_fill, 6)
+        end
+        if core.graphics.rect_2d then
+            core.graphics.rect_2d(constants.vec2.new(gx, gy), gw, gh, col_drop_border, 2, 6)
+        end
+    end
     local rows_fit = math.max(0, math.floor((gh - self.header_h - 4) / self.row_height))
     local count = math.min(rows_fit, #self.items)
     local y = gy + self.header_h + 2
@@ -145,6 +160,29 @@ function Listbox:render()
             end
         end
         y = y + self.row_height
+    end
+
+    -- If dragging from this listbox, draw a floating ghost label near the cursor
+    if constants.listbox_drag and constants.listbox_drag.source == self then
+        local ghost_text = tostring(constants.listbox_drag.text or "")
+        if ghost_text ~= "" and core.graphics and core.graphics.text_2d then
+            local ghost_bg = constants.color.new(20, 30, 50, 180)
+            local ghost_bd = constants.color.new(90, 140, 220, 220)
+            local tw = (core.graphics.get_text_width and core.graphics.get_text_width(ghost_text, constants.FONT_SIZE, 0)) or 60
+            local box_w = tw + 12
+            local box_h = self.row_height - 2
+            local bx = mouse.x + 14
+            local by = mouse.y + 8
+            if core.graphics.rect_2d_filled then
+                core.graphics.rect_2d_filled(constants.vec2.new(bx, by), box_w, box_h, ghost_bg, 4)
+            end
+            if core.graphics.rect_2d then
+                core.graphics.rect_2d(constants.vec2.new(bx, by), box_w, box_h, ghost_bd, 1, 4)
+            end
+            local tx = bx + 6
+            local ty = by + math.floor((box_h - (constants.FONT_SIZE or 14)) / 2) - 1
+            core.graphics.text_2d(ghost_text, constants.vec2.new(tx, ty), constants.FONT_SIZE, constants.color.white(255), false)
+        end
     end
 
     -- Drop handling: if a drag exists and mouse released over this listbox, move item
