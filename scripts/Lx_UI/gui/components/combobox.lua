@@ -64,12 +64,12 @@ function Combobox:render()
     local mouse = constants.mouse_state.position
     local over_header = helpers.is_point_in_rect(mouse.x, mouse.y, gx, gy, gw, gh)
 
-    local col_bg = constants.color.new(18, 24, 40, 225)
-    local col_border = constants.color.new(18, 22, 30, 220)
+    local col_bg = constants.color.new(16, 20, 34, 235)
+    local col_border = constants.color.new(32, 40, 70, 255)
     local col_hover = constants.color.new(36, 52, 96, 235)
     local col_text = constants.color.white(255)
-    local col_items_bg = constants.color.new(22, 30, 48, 235)
-    local col_item_hover = constants.color.new(56, 88, 150, 255)
+    local col_items_bg = constants.color.new(20, 26, 42, 245)
+    local col_item_hover = constants.color.new(76, 110, 180, 255)
 
     -- header
     local header_bg = over_header and col_hover or col_bg

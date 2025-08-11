@@ -93,13 +93,13 @@ function Listbox:render()
     local gw = self.w
     local gh = self.h
 
-    local col_bg = constants.color.new(18, 24, 40, 225)
-    local col_border = constants.color.new(18, 22, 30, 220)
-    local col_row = constants.color.new(36, 52, 96, 235)
-    local col_row_hover = constants.color.new(56, 88, 150, 255)
-    local col_row_selected = constants.color.new(92, 128, 205, 255)
+    local col_bg = constants.color.new(16, 20, 34, 235)
+    local col_border = constants.color.new(32, 40, 70, 255)
+    local col_row = constants.color.new(34, 50, 88, 240)
+    local col_row_hover = constants.color.new(76, 110, 180, 255)
+    local col_row_selected = constants.color.new(120, 160, 230, 255)
     local col_text = constants.color.white(255)
-    local col_header = constants.color.new(44, 64, 110, 210)
+    local col_header = constants.color.new(56, 80, 140, 230)
 
     if core.graphics.rect_2d_filled then
         core.graphics.rect_2d_filled(constants.vec2.new(gx, gy), gw, gh, col_bg, 6)

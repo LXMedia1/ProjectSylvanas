@@ -48,9 +48,9 @@ function Panel:render()
     local gx = self.gui.x + self.x
     local gy = self.gui.y + self.y
 
-    local col_bg = constants.color.new(18, 24, 40, 160)
-    local col_border = constants.color.new(18, 22, 30, 220)
-    local col_header = constants.color.new(44, 64, 110, 210)
+    local col_bg = constants.color.new(14, 18, 30, 220)
+    local col_border = constants.color.new(32, 40, 70, 255)
+    local col_header = constants.color.new(56, 80, 140, 230)
     local col_title = constants.color.white(255)
 
     if core.graphics.rect_2d_filled then

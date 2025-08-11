@@ -62,10 +62,10 @@ function Slider:render()
     local len = self.length
     local th = self.thickness
 
-    local col_track = constants.color.new(18, 24, 40, 220)
-    local col_border = constants.color.new(18, 22, 30, 220)
-    local col_fill = constants.color.new(86, 120, 200, 240)
-    local col_knob = constants.color.white(255)
+    local col_track = constants.color.new(16, 20, 34, 235)
+    local col_border = constants.color.new(32, 40, 70, 255)
+    local col_fill = constants.color.new(120, 160, 230, 255)
+    local col_knob = constants.color.white(240)
 
     -- compute fraction
     local f = (self.value - self.min_value) / (self.max_value - self.min_value)
