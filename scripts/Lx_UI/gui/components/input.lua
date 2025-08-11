@@ -341,8 +341,10 @@ end
 
 -- Render an invisible menu window exactly over the input to block clicks
 function Input:render_proxy_menu()
-  if not (self.is_focused or self._pre_focus_active) then return end
-  if not self._blocker or not (self.gui and self.gui.is_open) then return end
+  if not (self.is_focused or self._pre_focus_active) or not (self._blocker and self.gui and self.gui.is_open) then
+    if self._blocker and self._blocker.set_visibility then self._blocker:set_visibility(false) end
+    return
+  end
   -- Align a tiny menu window behind our input and render the menu textbox inside
   local gx = self.gui.x + self.x
   local gy = self.gui.y + self.y
@@ -350,6 +352,7 @@ function Input:render_proxy_menu()
   -- keep global capture up to date for menu context consumers
   constants.typing_capture = { x = gx, y = gy, w = w, h = h }
   if self._blocker.stop_forcing_size then self._blocker:stop_forcing_size() end
+  if self._blocker.set_visibility then self._blocker:set_visibility(true) end
   if self._blocker.force_next_begin_window_pos then
     self._blocker:force_next_begin_window_pos(constants.vec2.new(gx, gy))
   end
