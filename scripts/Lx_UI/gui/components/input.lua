@@ -29,6 +29,11 @@ function Input:new(owner_gui, x, y, w, h, opts, on_change)
   -- backspace repeat state (ms)
   o._bs_prev_down = false
   o._bs_next_repeat = 0
+  -- small invisible menu window behind the input + a core text_input to grab focus
+  if core.menu and core.menu.window then
+    local bid = "lx_ui_input_blocker_" .. tostring(owner_gui.unique_key or "gui") .. "_" .. tostring(math.random(1000000))
+    o._blocker = core.menu.window(bid)
+  end
   -- invisible core text_input to capture keyboard focus
   o._proxy_id = "lxui_input_text_" .. tostring(owner_gui.unique_key or "gui") .. "_" .. tostring(math.random(1000000))
   if core.menu and core.menu.text_input then
@@ -314,9 +319,52 @@ end
 -- Render an invisible menu window exactly over the input to block clicks
 function Input:render_proxy_menu()
   if not self.is_focused then return end
-  if self._menu_text and self._menu_text.render then
-    -- render with a label so it becomes focusable by the core and grabs input routing
-    self._menu_text:render("Lx_UI Typing", "Routing capture field")
+  if not self._blocker or not (self.gui and self.gui.is_open) then return end
+  -- Align a tiny menu window behind our input and render the menu textbox inside
+  local gx = self.gui.x + self.x
+  local gy = self.gui.y + self.y
+  local w, h = self.w, self.h
+  if self._blocker.stop_forcing_size then self._blocker:stop_forcing_size() end
+  if self._blocker.force_next_begin_window_pos then
+    self._blocker:force_next_begin_window_pos(constants.vec2.new(gx, gy))
+  end
+  if self._blocker.set_next_window_min_size then
+    self._blocker:set_next_window_min_size(constants.vec2.new(w, h))
+  end
+  if self._blocker.force_window_size then
+    self._blocker:force_window_size(constants.vec2.new(w, h))
+  end
+  if self._blocker.set_next_window_padding then
+    self._blocker:set_next_window_padding(constants.vec2.new(0, 0))
+  end
+  if self._blocker.set_next_window_items_spacing then
+    self._blocker:set_next_window_items_spacing(constants.vec2.new(0, 0))
+  end
+  if self._blocker.set_next_window_items_inner_spacing then
+    self._blocker:set_next_window_items_inner_spacing(constants.vec2.new(0, 0))
+  end
+  if self._blocker.set_background_multicolored then
+    local c = constants.color.new(0,0,0,0)
+    self._blocker:set_background_multicolored(c,c,c,c)
+  end
+  if self._blocker.begin then
+    self._blocker:begin(
+      0,
+      false,
+      constants.color.new(0,0,0,0),
+      constants.color.new(0,0,0,0),
+      0,
+      function()
+        -- Ensure input capture in this small window
+        if self._blocker.set_next_widget_width then
+          self._blocker:set_next_widget_width(w)
+        end
+        if self._blocker.block_input_capture then self._blocker:block_input_capture() end
+        if self._menu_text and self._menu_text.render then
+          self._menu_text:render(" ", " ")
+        end
+      end
+    )
   end
 end
 

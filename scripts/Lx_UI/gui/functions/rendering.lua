@@ -143,7 +143,7 @@ local function render_window(gui)
             if ti and ti.render then ti:render() end
         end
     end
-    -- After drawing, render hidden menu inputs so focused text boxes capture keys
+    -- After drawing, render tiny aligned menu windows + inputs so focused text boxes capture keys
     if gui._text_inputs then
         for i = 1, #gui._text_inputs do
             local ti = gui._text_inputs[i]
