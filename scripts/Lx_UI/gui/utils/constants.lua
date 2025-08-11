@@ -30,6 +30,9 @@ local mouse_state = {
     left_down = false,
     left_clicked = false,
     last_left = false,
+    right_down = false,
+    right_clicked = false,
+    last_right = false,
     is_over_gui = false,
 }
 

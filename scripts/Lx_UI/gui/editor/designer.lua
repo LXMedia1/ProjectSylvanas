@@ -29,6 +29,11 @@ function Designer:new(owner_gui)
   o._palette_drag_kind = nil
   o._drag_w = 0
   o._drag_h = 0
+  -- context menu state
+  o._ctx_open = false
+  o._ctx_x, o._ctx_y = 0, 0
+  o._ctx_target = nil
+  o._edit_size_popup = false
   return o
 end
 
@@ -147,6 +152,7 @@ function Designer:render(ox, oy)
     end
     local list_y = palette_y + 26
     local bottom_reserved = 36 -- space for Export button
+    local list_y_limit = palette_y + content_h - bottom_reserved - 10
     -- Build categories map
     local cats = {}
     for i = 1, #palette_defs do
@@ -179,6 +185,7 @@ function Designer:render(ox, oy)
           local iw = palette_w - 16
           local ix = palette_x + 8
           local iy = list_y
+          if iy + ih > list_y_limit then break end
           local over = point_in_rect(constants.mouse_state.position.x, constants.mouse_state.position.y, ix, iy, iw, ih)
           local bg = over and constants.color.new(76, 110, 180, 255) or constants.color.new(36, 52, 96, 220)
           core.graphics.rect_2d_filled(constants.vec2.new(ix, iy), iw, ih, bg, 4)
@@ -272,6 +279,24 @@ function Designer:render(ox, oy)
     end
   end
 
+  -- Right-click context menu open
+  if constants.mouse_state.right_clicked then
+    self._ctx_open = false
+    self._edit_size_popup = false
+    self._ctx_target = nil
+    for i = #self.components, 1, -1 do
+      local c = self.components[i]
+      local cx, cy = self.gui.x + c.x, self.gui.y + c.y
+      if point_in_rect(m.x, m.y, cx, cy, c.w, c.h) then
+        self.selected = c
+        self._ctx_open = true
+        self._ctx_target = c
+        self._ctx_x, self._ctx_y = m.x, m.y
+        break
+      end
+    end
+  end
+
   -- Draw components and process selection/move/resize
   local selected = nil
   for i = 1, #self.components do self.components[i].__selected = false end
@@ -323,6 +348,106 @@ function Designer:render(ox, oy)
   for i = 1, #self.components do
     local c = self.components[i]
     draw_component(c, self.gui.x + c.x, self.gui.y + c.y)
+  end
+
+  -- Context menu rendering (on top)
+  if self._ctx_open and self._ctx_target then
+    local cm_x = self._ctx_x
+    local cm_y = self._ctx_y
+    local cm_w = 160
+    local row_h = 18
+    local items = { "Edit size", "Resize mode", "Bring to front", "Duplicate", "Delete" }
+    local bg = constants.color.new(16, 20, 34, 240)
+    local bd = constants.color.new(32, 40, 70, 255)
+    core.graphics.rect_2d_filled(constants.vec2.new(cm_x, cm_y), cm_w, row_h * #items + 8, bg, 6)
+    core.graphics.rect_2d(constants.vec2.new(cm_x, cm_y), cm_w, row_h * #items + 8, bd, 1, 6)
+    local my = cm_y + 4
+    local mx = m.x
+    local mypos = m.y
+    for i = 1, #items do
+      local over = point_in_rect(mx, mypos, cm_x + 2, my, cm_w - 4, row_h)
+      local fill = over and constants.color.new(56, 88, 150, 240) or constants.color.new(26, 32, 48, 220)
+      core.graphics.rect_2d_filled(constants.vec2.new(cm_x + 2, my), cm_w - 4, row_h, fill, 4)
+      core.graphics.text_2d(items[i], constants.vec2.new(cm_x + 8, my - 1), constants.FONT_SIZE, constants.color.white(255), false)
+      if over and constants.mouse_state.left_clicked then
+        local act = items[i]
+        if act == "Edit size" then
+          self._edit_size_popup = true
+          self._edit_size_x, self._edit_size_y = cm_x + cm_w + 6, cm_y
+          self._ctx_open = false
+        elseif act == "Resize mode" then
+          -- enter resize mode: next left drag inside the selected component resizes
+          self._resize_mode = true
+          self._ctx_open = false
+        elseif act == "Bring to front" then
+          -- move target to end of array
+          local t = self._ctx_target
+          for idx = 1, #self.components do
+            if self.components[idx] == t then table.remove(self.components, idx) break end
+          end
+          table.insert(self.components, t)
+          self._ctx_open = false
+        elseif act == "Duplicate" then
+          local t = self._ctx_target
+          local copy = { kind = t.kind, x = t.x + 10, y = t.y + 10, w = t.w, h = t.h, text = t.text, title = t.title }
+          table.insert(self.components, copy)
+          self.selected = copy
+          self._ctx_open = false
+        elseif act == "Delete" then
+          local t = self._ctx_target
+          for idx = #self.components, 1, -1 do
+            if self.components[idx] == t then table.remove(self.components, idx) break end
+          end
+          self.selected = nil
+          self._ctx_open = false
+        end
+      end
+      my = my + row_h
+    end
+    -- close on click outside
+    if not point_in_rect(mx, mypos, cm_x, cm_y, cm_w, row_h * #items + 8) and constants.mouse_state.left_clicked then
+      self._ctx_open = false
+    end
+  end
+
+  -- Edit size popup
+  if self._edit_size_popup and self.selected then
+    local ex = self._edit_size_x or (self.gui.x + 20)
+    local ey = self._edit_size_y or (self.gui.y + 40)
+    local pw = 180
+    local ph = 70
+    local bg = constants.color.new(16, 20, 34, 240)
+    local bd = constants.color.new(32, 40, 70, 255)
+    core.graphics.rect_2d_filled(constants.vec2.new(ex, ey), pw, ph, bg, 6)
+    core.graphics.rect_2d(constants.vec2.new(ex, ey), pw, ph, bd, 1, 6)
+    core.graphics.text_2d("Width", constants.vec2.new(ex + 8, ey + 6), constants.FONT_SIZE, constants.color.white(255), false)
+    core.graphics.text_2d("Height", constants.vec2.new(ex + 8, ey + 32), constants.FONT_SIZE, constants.color.white(255), false)
+    local function draw_stepper(x, y, value, cb)
+      local bw, bh = 18, 16
+      local minus_x = x
+      local plus_x = x + 60
+      core.graphics.rect_2d_filled(constants.vec2.new(minus_x, y), bw, bh, constants.color.new(36,52,96,220), 4)
+      core.graphics.rect_2d_filled(constants.vec2.new(plus_x, y), bw, bh, constants.color.new(36,52,96,220), 4)
+      core.graphics.text_2d("-", constants.vec2.new(minus_x + 6, y - 2), constants.FONT_SIZE, constants.color.white(255), false)
+      core.graphics.text_2d("+", constants.vec2.new(plus_x + 5, y - 2), constants.FONT_SIZE, constants.color.white(255), false)
+      core.graphics.text_2d(tostring(value), constants.vec2.new(x + 24, y - 2), constants.FONT_SIZE, constants.color.white(255), false)
+      local mx, my = m.x, m.y
+      if point_in_rect(mx, my, minus_x, y, bw, bh) and constants.mouse_state.left_clicked then cb(-10) end
+      if point_in_rect(mx, my, plus_x, y, bw, bh) and constants.mouse_state.left_clicked then cb(10) end
+    end
+    draw_stepper(ex + 70, ey + 6, self.selected.w, function(delta) self.selected.w = math.max(20, self.selected.w + delta) end)
+    draw_stepper(ex + 70, ey + 32, self.selected.h, function(delta) self.selected.h = math.max(12, self.selected.h + delta) end)
+    -- close button
+    local cx, cy, cw, ch = ex + pw - 48, ey + ph - 22, 40, 18
+    core.graphics.rect_2d_filled(constants.vec2.new(cx, cy), cw, ch, constants.color.new(86,120,200,230), 4)
+    core.graphics.text_2d("Close", constants.vec2.new(cx + 8, cy - 2), constants.FONT_SIZE, constants.color.white(255), false)
+    if point_in_rect(m.x, m.y, cx, cy, cw, ch) and constants.mouse_state.left_clicked then
+      self._edit_size_popup = false
+    end
+    -- close if click outside
+    if constants.mouse_state.left_clicked and not point_in_rect(m.x, m.y, ex, ey, pw, ph) then
+      self._edit_size_popup = false
+    end
   end
 
   -- Export button moved to palette panel (see above)

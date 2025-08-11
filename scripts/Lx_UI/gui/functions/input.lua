@@ -6,10 +6,14 @@ local function update_mouse()
     constants.mouse_state.position.x = p.x
     constants.mouse_state.position.y = p.y
     local down = core.input.is_key_pressed(0x01)
+    local rdown = core.input.is_key_pressed(0x02)
     -- clicked on release
     constants.mouse_state.left_clicked = (constants.mouse_state.last_left and not down) or false
+    constants.mouse_state.right_clicked = (constants.mouse_state.last_right and not rdown) or false
     constants.mouse_state.left_down = down
+    constants.mouse_state.right_down = rdown
     constants.mouse_state.last_left = down
+    constants.mouse_state.last_right = rdown
     constants.mouse_state.is_over_gui = helpers.is_mouse_over_gui_area()
 end
 
