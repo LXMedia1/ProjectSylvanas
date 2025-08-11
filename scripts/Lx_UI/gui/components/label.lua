@@ -12,11 +12,22 @@ function Label:new(owner_gui, text, x, y, col, font_size)
     o.y = tonumber(y or 0) or 0
     o.color = col or constants.color.white(255)
     o.size = font_size or constants.FONT_SIZE
+    o.visible_if = nil
     return o
+end
+
+function Label:set_visible_if(fn)
+    self.visible_if = fn
+end
+
+function Label:is_visible()
+    if self.visible_if then return not not self.visible_if(self) end
+    return true
 end
 
 function Label:render()
     if not (self.gui and self.gui.is_open) then return end
+    if not self:is_visible() then return end
     if not (core.graphics and core.graphics.text_2d) then return end
     core.graphics.text_2d(self.text, constants.vec2.new(self.gui.x + self.x, self.gui.y + self.y), self.size, self.color, false)
 end
