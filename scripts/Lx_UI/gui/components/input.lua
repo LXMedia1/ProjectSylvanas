@@ -371,8 +371,16 @@ function Input:render_proxy_menu()
         if self._blocker.set_focus then self._blocker:set_focus() end
         if self._blocker.block_input_capture then self._blocker:block_input_capture() end
         if self._menu_text and self._menu_text.render then
-          -- Render a standard, visible menu input so core definitely captures focus
-          self._menu_text:render("Focus", "")
+          -- Render the menu input exactly the same size with no label; make it virtually invisible
+          local tr_bg = constants.color.new(0,0,0,1)
+          local tr_bd = constants.color.new(0,0,0,1)
+          local tr_sel = constants.color.new(0,0,0,1)
+          local tr_text = constants.color.new(0,0,0,1)
+          if self._menu_text.render_custom then
+            self._menu_text:render_custom("", "", tr_bg, tr_bd, tr_sel, tr_text, 0)
+          else
+            self._menu_text:render("", "")
+          end
         end
       end
     )
