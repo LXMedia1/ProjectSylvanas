@@ -165,6 +165,7 @@ local function on_update()
                     gui._lb_topbar:set_items(top)
                     gui._lb_sidebar:set_items(side)
                     gui._lb_palette:set_items(pal)
+                    -- Ensure GUI launcher filtering on-the-fly (renderers read constants.launcher_assignments)
                     -- After repopulating, nothing else to do; assignments already synced above when no drag is active
                 else
                     -- Editor tab (placeholder)

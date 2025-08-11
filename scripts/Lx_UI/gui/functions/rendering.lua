@@ -193,7 +193,10 @@ local function render_topbar()
             if chk.get_state then enabled = chk:get_state() elseif chk.get then enabled = chk:get() end
         end
         if gui.is_hidden_from_launcher then enabled = false end
-        if enabled then
+        -- filter by launcher assignment: only show items assigned to topbar or default
+        local slot = (constants.launcher_assignments and constants.launcher_assignments[name]) or "default"
+        local allowed = (slot == "topbar" or slot == "default")
+        if enabled and allowed then
             local label = name
             local text_w = (core.graphics.get_text_width and core.graphics.get_text_width(label, constants.FONT_SIZE, 0)) or 60
             -- Give tabs a generous width so text can truly center inside
@@ -311,7 +314,9 @@ local function render_sidebar()
             if chk.get_state then enabled = chk:get_state() elseif chk.get then enabled = chk:get() end
         end
         if gui and gui.is_hidden_from_launcher then enabled = false end
-        if enabled then num_enabled = num_enabled + 1 end
+        local slot = (constants.launcher_assignments and constants.launcher_assignments[name]) or "default"
+        local allowed = (slot == "sidebar" or slot == "default")
+        if enabled and allowed then num_enabled = num_enabled + 1 end
     end
     local panel_h = num_enabled * item_h + math.max(0, num_enabled - 1) * spacing + 16
     if core.graphics.rect_2d_filled then
@@ -329,7 +334,9 @@ local function render_sidebar()
             if chk.get_state then enabled = chk:get_state() elseif chk.get then enabled = chk:get() end
         end
         if gui.is_hidden_from_launcher then enabled = false end
-        if enabled then
+        local slot = (constants.launcher_assignments and constants.launcher_assignments[name]) or "default"
+        local allowed = (slot == "sidebar" or slot == "default")
+        if enabled and allowed then
             local hovered = (mouse.x >= x and mouse.x <= x + w and mouse.y >= cur_y and mouse.y <= cur_y + item_h)
             local bg = gui.is_open and col_item_active or (hovered and col_item_hover or col_item)
             if core.graphics.rect_2d_filled then
@@ -380,7 +387,9 @@ local function render_palette()
             if chk.get_state then enabled = chk:get_state() elseif chk.get then enabled = chk:get() end
         end
         if gui.is_hidden_from_launcher then enabled = false end
-        if enabled then table.insert(entries, { name = name, gui = gui }) end
+        local slot = (constants.launcher_assignments and constants.launcher_assignments[name]) or "default"
+        local allowed = (slot == "palette" or slot == "default")
+        if enabled and allowed then table.insert(entries, { name = name, gui = gui }) end
     end
     local panel_h = #entries * item_h + math.max(0, #entries - 1) * spacing + 16
     constants.palette_rect = { x = x - 8, y = y - 8, w = w + 16, h = panel_h }
