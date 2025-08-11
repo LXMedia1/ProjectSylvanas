@@ -146,6 +146,7 @@ function Designer:render(ox, oy)
       core.graphics.text_2d("Components", constants.vec2.new(palette_x + 10, palette_y + 6), constants.FONT_SIZE, constants.color.white(255), false)
     end
     local list_y = palette_y + 26
+    local bottom_reserved = 36 -- space for Export button
     -- Build categories map
     local cats = {}
     for i = 1, #palette_defs do
@@ -160,11 +161,17 @@ function Designer:render(ox, oy)
       local cname = order[oi]
       local arr = cats[cname]
       if arr and #arr > 0 then
-        -- Category header
-        local hcol = constants.color.new(56, 80, 140, 230)
-        core.graphics.rect_2d_filled(constants.vec2.new(palette_x + 6, list_y), palette_w - 12, 18, hcol, 4)
-        core.graphics.text_2d(cname, constants.vec2.new(palette_x + 12, list_y + 2), constants.FONT_SIZE, constants.color.white(255), false)
-        list_y = list_y + 22
+        -- Category header (non-button look): left accent + label + underline
+        local accent = constants.color.new(120, 190, 255, 255)
+        local hdr_h = 16
+        if core.graphics.rect_2d_filled then
+          core.graphics.rect_2d_filled(constants.vec2.new(palette_x + 6, list_y + 2), 3, hdr_h - 4, accent, 2)
+        end
+        core.graphics.text_2d(cname, constants.vec2.new(palette_x + 14, list_y + 0), constants.FONT_SIZE, constants.color.white(235), false)
+        if core.graphics.rect_2d then
+          core.graphics.rect_2d(constants.vec2.new(palette_x + 6, list_y + hdr_h + 2), palette_w - 12, 1, col_bd, 1, 0)
+        end
+        list_y = list_y + hdr_h + 6
         -- Items
         for ii = 1, #arr do
           local d = arr[ii]
@@ -187,6 +194,19 @@ function Designer:render(ox, oy)
           list_y = list_y + ih + 6
         end
         list_y = list_y + 6
+      end
+    end
+
+    -- Export button anchored under the component list (inside the palette panel)
+    do
+      local bw, bh = palette_w - 20, 20
+      local ex_x = palette_x + 10
+      local ex_y = palette_y + content_h - bh - 10
+      core.graphics.rect_2d_filled(constants.vec2.new(ex_x, ex_y), bw, bh, constants.color.new(86,120,200,230), 4)
+      core.graphics.rect_2d(constants.vec2.new(ex_x, ex_y), bw, bh, col_bd, 1, 4)
+      core.graphics.text_2d("Export Lua", constants.vec2.new(ex_x + 14, ex_y - 2), constants.FONT_SIZE, constants.color.white(255), false)
+      if point_in_rect(constants.mouse_state.position.x, constants.mouse_state.position.y, ex_x, ex_y, bw, bh) and pressed then
+        self:export()
       end
     end
   end
@@ -305,16 +325,7 @@ function Designer:render(ox, oy)
     draw_component(c, self.gui.x + c.x, self.gui.y + c.y)
   end
 
-  -- Export button
-  local ex_x = canvas_x + canvas_w - 120
-  local ex_y = palette_y
-  local bw, bh = 110, 20
-  core.graphics.rect_2d_filled(constants.vec2.new(ex_x, ex_y), bw, bh, constants.color.new(86,120,200,230), 4)
-  core.graphics.rect_2d(constants.vec2.new(ex_x, ex_y), bw, bh, constants.color.new(32,40,70,255), 1, 4)
-  core.graphics.text_2d("Export Lua", constants.vec2.new(ex_x + 14, ex_y - 2), constants.FONT_SIZE, constants.color.white(255), false)
-  if point_in_rect(m.x, m.y, ex_x, ex_y, bw, bh) and pressed then
-    self:export()
-  end
+  -- Export button moved to palette panel (see above)
 end
 
 local function escape_str(s)
