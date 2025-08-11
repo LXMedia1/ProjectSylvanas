@@ -297,33 +297,7 @@ function Designer:render(ox, oy)
         self.resize_corner = nil
         self._offx = m.x - cx
         self._offy = m.y - cy
-        -- double-click to inline edit for text-capable components
-        local now_t = (core.time and core.time()) or 0
-        local dt = now_t - (self._last_click_t or 0)
-        if self._last_click_target == c and dt >= 0 and dt <= 350 then
-          local k = c.kind
-          if k == "label" or k == "button" or k == "checkbox" or k == "combobox" or k == "panel" or k == "input" then
-            if not self._inline_input then
-              local ix = c.x + 4
-              local iy = c.y + math.max(0, math.floor((c.h - 20) / 2))
-              self._inline_input = self.gui:AddInput(ix, iy, math.max(60, c.w - 8), 20, { multiline = false, text = tostring(c.text or c.title or "") }, function(_, val)
-                if k == "panel" then c.title = val else c.text = val end
-              end)
-              self._inline_input:set_visible_if(function() return self._inline_edit_active end)
-            end
-            -- position and show
-            self._inline_input.x = c.x + 4
-            self._inline_input.y = c.y + math.max(0, math.floor((c.h - 20) / 2))
-            self._inline_input.w = math.max(60, c.w - 8)
-            local cur_disp = tostring(c.text or c.title or "")
-            self._inline_input:set_text(cur_disp)
-            self._inline_input.is_focused = true
-            self._inline_edit_active = true
-            self._inline_just_opened = true
-          end
-        end
-        self._last_click_t = now_t
-        self._last_click_target = c
+        -- no double-click editing here; editing is opened via context menu only
         hit_any = true
         break
       end
@@ -506,24 +480,7 @@ function Designer:render(ox, oy)
       end
       y = y + 26
     end
-    -- Width/Height steppers
-    core.graphics.text_2d("Width", constants.vec2.new(ex + 8, y), constants.FONT_SIZE, constants.color.white(255), false)
-    local function draw_stepper(x, y0, value, cb)
-      local bw, bh = 18, 16
-      local minus_x = x
-      local plus_x = x + 60
-      core.graphics.rect_2d_filled(constants.vec2.new(minus_x, y0), bw, bh, constants.color.new(36,52,96,220), 4)
-      core.graphics.rect_2d_filled(constants.vec2.new(plus_x, y0), bw, bh, constants.color.new(36,52,96,220), 4)
-      core.graphics.text_2d("-", constants.vec2.new(minus_x + 6, y0 - 2), constants.FONT_SIZE, constants.color.white(255), false)
-      core.graphics.text_2d("+", constants.vec2.new(plus_x + 5, y0 - 2), constants.FONT_SIZE, constants.color.white(255), false)
-      core.graphics.text_2d(tostring(value), constants.vec2.new(x + 24, y0 - 2), constants.FONT_SIZE, constants.color.white(255), false)
-      if point_in_rect(m.x, m.y, minus_x, y0, bw, bh) and constants.mouse_state.left_clicked then cb(-10) end
-      if point_in_rect(m.x, m.y, plus_x, y0, bw, bh) and constants.mouse_state.left_clicked then cb(10) end
-    end
-    draw_stepper(ex + 60, y, self.selected.w, function(delta) self.selected.w = math.max(20, self.selected.w + delta) end)
-    y = y + 22
-    core.graphics.text_2d("Height", constants.vec2.new(ex + 8, y), constants.FONT_SIZE, constants.color.white(255), false)
-    draw_stepper(ex + 60, y, self.selected.h, function(delta) self.selected.h = math.max(12, self.selected.h + delta) end)
+    -- Resizing moved to corner handle; no width/height steppers in edit
     -- close button
     local cx, cy, cw, ch = ex + pw - 48, ey + ph - 22, 40, 18
     core.graphics.rect_2d_filled(constants.vec2.new(cx, cy), cw, ch, constants.color.new(86,120,200,230), 4)
