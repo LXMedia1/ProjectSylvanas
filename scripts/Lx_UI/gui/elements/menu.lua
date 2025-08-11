@@ -5,6 +5,7 @@ local Button = require("gui/components/button")
 local Checkbox = require("gui/components/checkbox")
 local Panel = require("gui/components/panel")
 local Listbox = require("gui/components/listbox")
+local Combobox = require("gui/components/combobox")
 
 local Menu = {}
 Menu.__index = Menu
@@ -90,6 +91,13 @@ function Menu:AddListbox(x, y, w, h, items, on_change, title)
     self._listboxes = self._listboxes or {}
     table.insert(self._listboxes, lb)
     return lb
+end
+
+function Menu:AddCombobox(x, y, w, h, items, selected_index, on_change, title)
+    local cb = Combobox:new(self, x, y, w, h, items, selected_index, on_change, title)
+    self._comboboxes = self._comboboxes or {}
+    table.insert(self._comboboxes, cb)
+    return cb
 end
 
 return {

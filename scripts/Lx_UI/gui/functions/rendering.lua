@@ -131,6 +131,12 @@ local function render_window(gui)
             if c and c.render then c:render() end
         end
     end
+    if gui._comboboxes then
+        for i = 1, #gui._comboboxes do
+            local cb = gui._comboboxes[i]
+            if cb and cb.render then cb:render() end
+        end
+    end
     if gui._listboxes then
         for i = 1, #gui._listboxes do
             local lb = gui._listboxes[i]
