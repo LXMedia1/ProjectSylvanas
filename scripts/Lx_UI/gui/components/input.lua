@@ -19,12 +19,16 @@ function Input:new(owner_gui, x, y, w, h, opts, on_change)
   o._keys_down = {}
   o._caret_t = 0
   o._last_click_t = 0
-  -- invisible blocker window to stop click-through and help block game input while editing
-  if core.menu and core.menu.window then
-    local bid = "lx_ui_input_blocker_" .. tostring(owner_gui.unique_key or "gui") .. "_" .. tostring(math.random(1000000))
-    o._blocker = core.menu.window(bid)
-  end
-  o._movement_locked = false
+  o._last_click_x = 0
+  o._last_click_y = 0
+  -- text editing state
+  o._caret = string.len(o.text or "")
+  o._sel_anchor = nil
+  o._is_selecting = false
+  o._mouse_was_down = false
+  -- backspace repeat state (ms)
+  o._bs_prev_down = false
+  o._bs_next_repeat = 0
   -- invisible core text_input to capture keyboard focus
   o._proxy_id = "lxui_input_text_" .. tostring(owner_gui.unique_key or "gui") .. "_" .. tostring(math.random(1000000))
   if core.menu and core.menu.text_input then
@@ -65,6 +69,69 @@ local function draw_text_lines(text, x, y, w)
   end
 end
 
+local function clamp(v, lo, hi)
+  if v < lo then return lo elseif v > hi then return hi else return v end
+end
+
+local function measure(text)
+  if core.graphics and core.graphics.get_text_width then
+    return core.graphics.get_text_width(text or "", constants.FONT_SIZE, 0) or 0
+  end
+  return 0
+end
+
+local function split_lines_with_index(text)
+  local lines, starts = {}, {}
+  local idx = 1
+  for line in string.gmatch(text or "", "[^\n]*") do
+    table.insert(lines, line)
+    table.insert(starts, idx)
+    idx = idx + #line + 1 -- +1 for newline
+  end
+  return lines, starts
+end
+
+local function index_from_mouse(text, x_rel, y_rel)
+  local line_h = constants.FONT_SIZE + 2
+  local lines, starts = split_lines_with_index(text)
+  local line_idx = clamp(1 + math.floor(y_rel / line_h), 1, #lines > 0 and #lines or 1)
+  local line_text = lines[line_idx] or ""
+  local line_start = starts[line_idx] or 1
+  -- find nearest char by scanning widths (acceptable for short inputs)
+  local best_i = 0
+  local best_dx = 1e9
+  for i = 0, #line_text do
+    local px = measure(string.sub(line_text, 1, i))
+    local dx = math.abs(px - x_rel)
+    if dx < best_dx then
+      best_dx = dx
+      best_i = i
+    end
+  end
+  return line_start - 1 + best_i
+end
+
+local function caret_pos_from_index(text, caret_index)
+  local lines, starts = split_lines_with_index(text)
+  local line_h = constants.FONT_SIZE + 2
+  local lx, ly = 0, 0
+  local idx = caret_index or 0
+  for i = 1, #lines do
+    local s = starts[i]
+    local e = s + #lines[i] -- exclusive of newline
+    if idx <= (e - 1) then
+      lx = measure(string.sub(lines[i], 1, idx - s + 1))
+      ly = (i - 1) * line_h
+      return lx, ly
+    end
+  end
+  -- fallthrough -> end of text
+  local last_line = #lines > 0 and #lines or 1
+  lx = measure(lines[last_line] or "")
+  ly = (last_line - 1) * line_h
+  return lx, ly
+end
+
 local function key_edge(self, vk)
   local down = core.input and core.input.is_key_pressed and core.input.is_key_pressed(vk)
   local prev = self._keys_down[vk] or false
@@ -92,10 +159,13 @@ function Input:render()
   local m = constants.mouse_state.position
   local over = helpers.is_point_in_rect(m.x, m.y, gx, gy, w, h)
   if over and constants.mouse_state.left_clicked then
-    -- focus only on double-click
+    -- focus only on a real double-click (short interval + minimal movement)
     local now_t = (core.time and core.time()) or 0
     local dt = now_t - (self._last_click_t or 0)
-    if dt >= 0 and dt <= 350 then
+    local dx = (constants.mouse_state.position.x or 0) - (self._last_click_x or 0)
+    local dy = (constants.mouse_state.position.y or 0) - (self._last_click_y or 0)
+    local dist2 = dx*dx + dy*dy
+    if dt >= 0 and dt <= 250 and dist2 <= 36 then
       self.is_focused = true
       constants.is_typing = true
       if self.gui._text_inputs then
@@ -103,8 +173,12 @@ function Input:render()
           if ti ~= self then ti.is_focused = false end
         end
       end
+      self._last_click_t = -100000 -- prevent triple-click from chaining
+    else
+      self._last_click_t = now_t
+      self._last_click_x = constants.mouse_state.position.x or 0
+      self._last_click_y = constants.mouse_state.position.y or 0
     end
-    self._last_click_t = now_t
   elseif constants.mouse_state.left_clicked and not over then
     self.is_focused = false
     constants.is_typing = false
@@ -112,11 +186,29 @@ function Input:render()
 
   -- input handling when focused
   if self.is_focused and core.graphics and core.graphics.translate_vkey_to_string then
+    -- mouse press/release within input to place caret and selection
+    local pressed = (constants.mouse_state.left_down and not self._mouse_was_down)
+    local released = (self._mouse_was_down and not constants.mouse_state.left_down)
+    self._mouse_was_down = constants.mouse_state.left_down
+    if pressed and over then
+      local x_rel = (constants.mouse_state.position.x - gx)
+      local y_rel = (constants.mouse_state.position.y - gy)
+      self._caret = clamp(index_from_mouse(self.text or "", x_rel, y_rel), 0, #(self.text or ""))
+      self._sel_anchor = self._caret
+      self._is_selecting = true
+    elseif self._is_selecting and constants.mouse_state.left_down then
+      local x_rel = (constants.mouse_state.position.x - gx)
+      local y_rel = (constants.mouse_state.position.y - gy)
+      self._caret = clamp(index_from_mouse(self.text or "", x_rel, y_rel), 0, #(self.text or ""))
+    elseif released then
+      self._is_selecting = false
+    end
     -- Enter handling
     local VK_RETURN = 0x0D
     if key_edge(self, VK_RETURN) then
       if self.multiline then
         self.text = self.text .. "\n"
+        self._caret = #(self.text)
         if self.on_change then self.on_change(self, self.text) end
       else
         self.is_focused = false
@@ -125,20 +217,49 @@ function Input:render()
     end
     -- Backspace
     local VK_BACK = 0x08
-    if key_edge(self, VK_BACK) then
-      local len = string.len(self.text or "")
-      if len > 0 then
-        self.text = string.sub(self.text, 1, len - 1)
-        if self.on_change then self.on_change(self, self.text) end
+    local now_ms = (core.time and core.time()) or 0
+    local bs_now = core.input and core.input.is_key_pressed and core.input.is_key_pressed(VK_BACK)
+    local function delete_one()
+      local txt = self.text or ""
+      local s, e = self._sel_anchor, self._caret
+      if s and s ~= e then
+        local a, b = math.min(s, e), math.max(s, e)
+        self.text = (string.sub(txt, 1, a) or "") .. (string.sub(txt, b + 1) or "")
+        self._caret = a
+        self._sel_anchor = nil
+      else
+        if self._caret > 0 then
+          self.text = (string.sub(txt, 1, self._caret - 1) or "") .. (string.sub(txt, self._caret + 1) or "")
+          self._caret = self._caret - 1
+        end
       end
+      if self.on_change then self.on_change(self, self.text) end
     end
+    if bs_now and not self._bs_prev_down then
+      delete_one()
+      self._bs_next_repeat = now_ms + 350
+    elseif bs_now and self._bs_prev_down and now_ms >= (self._bs_next_repeat or now_ms + 1e9) then
+      delete_one()
+      self._bs_next_repeat = now_ms + 50
+    end
+    self._bs_prev_down = bs_now
     -- basic character input: scan keys 0x20..0x5A
     for vk = 0x20, 0x5A do
       if vk ~= VK_RETURN and vk ~= VK_BACK then
         if key_edge(self, vk) then
           local ch = core.graphics.translate_vkey_to_string(vk)
           if ch and ch ~= "" then
-            self.text = (self.text or "") .. ch
+            local txt = self.text or ""
+            local s, e = self._sel_anchor, self._caret
+            if s and s ~= e then
+              local a, b = math.min(s, e), math.max(s, e)
+              self.text = (string.sub(txt, 1, a) or "") .. ch .. (string.sub(txt, b + 1) or "")
+              self._caret = a + #ch
+              self._sel_anchor = nil
+            else
+              self.text = (string.sub(txt, 1, self._caret) or "") .. ch .. (string.sub(txt, self._caret + 1) or "")
+              self._caret = self._caret + #ch
+            end
             if self.on_change then self.on_change(self, self.text) end
           end
         end
@@ -146,18 +267,42 @@ function Input:render()
     end
   end
 
-  -- render text
+  -- render text and selection
   local pad = 6
-  draw_text_lines(self.text or "", gx + pad, gy + math.floor((h - constants.FONT_SIZE) / 2) - 1, w - pad * 2)
+  local base_y = gy + 2
+  local line_h = constants.FONT_SIZE + 2
+  local text = self.text or ""
+  local lines, starts = split_lines_with_index(text)
+  -- draw selection if exists
+  if self.is_focused and self._sel_anchor and self._sel_anchor ~= self._caret then
+    local a, b = math.min(self._sel_anchor, self._caret), math.max(self._sel_anchor, self._caret)
+    for i = 1, #lines do
+      local s = starts[i]
+      local e = s + #lines[i] - 1
+      local sel_s = math.max(a, s)
+      local sel_e = math.min(b, e)
+      if sel_s <= sel_e then
+        local x1 = gx + pad + measure(string.sub(lines[i], 1, sel_s - s))
+        local x2 = gx + pad + measure(string.sub(lines[i], 1, sel_e - s + 1))
+        local yy = base_y + (i - 1) * line_h
+        core.graphics.rect_2d_filled(constants.vec2.new(x1, yy), math.max(1, x2 - x1), line_h, constants.color.new(80,120,200,90), 2)
+      end
+    end
+  end
+  -- draw text lines
+  for i = 1, #lines do
+    local ty = base_y + (i - 1) * line_h
+    core.graphics.text_2d(lines[i], constants.vec2.new(gx + pad, ty), constants.FONT_SIZE, constants.color.white(255), false)
+  end
 
   -- caret (blink)
   if self.is_focused then
     self._caret_t = (self._caret_t or 0) + 1
     if (self._caret_t % 60) < 30 then
-      local tw = (core.graphics.get_text_width and core.graphics.get_text_width(self.text or "", constants.FONT_SIZE, 0)) or 0
-      local cx = gx + pad + tw + 1
-      local cy = gy + 4
-      core.graphics.line_2d(constants.vec2.new(cx, cy), constants.vec2.new(cx, gy + h - 4), constants.color.white(230), 1)
+      local cx_rel, cy_rel = caret_pos_from_index(text, self._caret)
+      local cx = gx + pad + cx_rel + 1
+      local cy = base_y + cy_rel + 2
+      core.graphics.line_2d(constants.vec2.new(cx, cy), constants.vec2.new(cx, cy + line_h - 4), constants.color.white(230), 1)
     end
   else
     self._caret_t = 0
@@ -167,53 +312,11 @@ function Input:render()
 end
 
 -- Render an invisible menu window exactly over the input to block clicks
-function Input:render_blocker()
-  -- If not focused or not visible/open, do nothing
-  if (not self.is_focused) or (not (self.gui and self.gui.is_open)) or (self.visible_if and not self:is_visible()) then
-    return
-  end
-  if not self._blocker then return end
-  local bx = 0
-  local by = 0
-  local sw, sh = 0, 0
-  if core.graphics and core.graphics.get_screen_size then
-    local scr = core.graphics.get_screen_size()
-    sw, sh = scr.x or 0, scr.y or 0
-  end
-  if self._blocker.stop_forcing_size then self._blocker:stop_forcing_size() end
-  if self._blocker.force_next_begin_window_pos then
-    self._blocker:force_next_begin_window_pos(constants.vec2.new(bx, by))
-  end
-  if self._blocker.set_next_window_min_size then
-    self._blocker:set_next_window_min_size(constants.vec2.new(sw > 0 and sw or (self.w), sh > 0 and sh or (self.h)))
-  end
-  if self._blocker.force_window_size then
-    self._blocker:force_window_size(constants.vec2.new(sw > 0 and sw or (self.w), sh > 0 and sh or (self.h)))
-  end
-  if self._blocker.set_background_multicolored then
-    local c = constants.color.new(0,0,0,0)
-    self._blocker:set_background_multicolored(c,c,c,c)
-  end
-  if self._blocker.begin then
-    self._blocker:begin(
-      0,
-      false,
-      constants.color.new(0,0,0,0),
-      constants.color.new(0,0,0,0),
-      0,
-      (core.enums and core.enums.window_enums and core.enums.window_enums.window_behaviour_flags and core.enums.window_enums.window_behaviour_flags.NO_MOVE) or 0,
-      0,
-      0,
-      function()
-        if self._blocker.add_artificial_item_bounds then
-          self._blocker:add_artificial_item_bounds(constants.vec2.new(0,0), constants.vec2.new(sw > 0 and sw or self.w, sh > 0 and sh or self.h))
-        end
-        -- render a hidden text_input to grab keyboard focus
-        if self._menu_text and self._menu_text.render then
-          self._menu_text:render(" ", " ")
-        end
-      end
-    )
+function Input:render_proxy_menu()
+  if not self.is_focused then return end
+  if self._menu_text and self._menu_text.render then
+    -- render with empty label/tooltip so it stays invisible in menu but grabs input focus
+    self._menu_text:render(" ", " ")
   end
 end
 

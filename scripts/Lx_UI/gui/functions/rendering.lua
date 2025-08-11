@@ -143,11 +143,11 @@ local function render_window(gui)
             if ti and ti.render then ti:render() end
         end
     end
-    -- After drawing, render invisible blockers for focused text boxes to block clicks and inputs
+    -- After drawing, render hidden menu inputs so focused text boxes capture keys
     if gui._text_inputs then
         for i = 1, #gui._text_inputs do
             local ti = gui._text_inputs[i]
-            if ti and ti.render_blocker then ti:render_blocker() end
+            if ti and ti.render_proxy_menu then ti:render_proxy_menu() end
         end
     end
     -- Draw listboxes first (their panels), then draw comboboxes so dropdowns appear above
@@ -549,6 +549,13 @@ local function render_all()
                             end
                         end
                     )
+                end
+                -- Input blockers early so they capture focus and block movement before rendering
+                if gui._text_inputs then
+                    for i = 1, #gui._text_inputs do
+                        local ti = gui._text_inputs[i]
+                        if ti and ti.render_blocker then ti:render_blocker() end
+                    end
                 end
             end
         end

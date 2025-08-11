@@ -21,6 +21,8 @@ local sidebar_offset_slider = nil
 local palette_offset_slider = nil
 local palette_left_slider = nil
 local plugin_cfg_loaded = false
+-- Debug router textbox to test key routing while typing
+local debug_router_input = (core.menu and core.menu.text_input) and core.menu.text_input("lx_ui_debug_router", false) or nil
 
 -- Update loop
 local function on_update()
@@ -342,6 +344,10 @@ local function on_render_menu()
             -- Menu offsets removed; sliders are now inside Settings window
             -- Per-GUI enable/disable toggles removed from main menu; handled in Settings window
             rendering.render_menu_controls()
+            -- Show a visible text input while typing to verify key routing
+            if constants and constants.is_typing and debug_router_input and debug_router_input.render then
+                debug_router_input:render("Typing Router (debug)", "Keys should land here while editing")
+            end
         end)
     end
 end
