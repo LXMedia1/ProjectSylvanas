@@ -21,6 +21,8 @@ function Listbox:new(owner_gui, x, y, w, h, items, on_change, title, list_type)
     o.header_h = 18
     -- Drag/drop grouping. Only listboxes with the same type_id accept drops from each other
     o.type_id = list_type
+    -- Optional semantic drop slot (e.g. "default" | "topbar" | "sidebar" | "palette")
+    o.drop_slot = nil
     return o
 end
 
@@ -47,6 +49,11 @@ end
 
 function Listbox:getType()
     return self.type_id
+end
+
+function Listbox:setDropSlot(slot)
+    self.drop_slot = slot
+    return self
 end
 
 function Listbox:is_visible()
@@ -134,6 +141,7 @@ function Listbox:render()
                 -- start drag immediately on press
                 self:set_selected_index(i)
                 constants.listbox_drag = { source = self, text = item, index = i, type_id = self.type_id }
+                if core and core.log then core.log("[Lx_UI] Listbox drag start from '" .. (self.title or "") .. "' item '" .. item .. "'") end
             end
         end
         y = y + self.row_height
@@ -147,18 +155,33 @@ function Listbox:render()
             local payload = constants.listbox_drag
             local same_type = (payload.type_id ~= nil and self.type_id ~= nil and payload.type_id == self.type_id)
             if self.accepts_drop and same_type then
-                -- remove from source
-                table.remove(payload.source.items, payload.index)
-                if payload.source.on_change then payload.source.on_change(payload.source, nil, nil) end
-                -- insert into target
+                -- Update central assignment map if present, using the target drop slot
+                if self.drop_slot and constants.launcher_assignments then
+                    constants.launcher_assignments[payload.text] = self.drop_slot
+                end
+                -- Remove from source items array if present
+                if payload.source and payload.source.items then
+                    for si = #payload.source.items, 1, -1 do
+                        if tostring(payload.source.items[si]) == tostring(payload.text) then
+                            table.remove(payload.source.items, si)
+                            break
+                        end
+                    end
+                end
+                -- Deduplicate in target then insert
+                for ti = #self.items, 1, -1 do
+                    if tostring(self.items[ti]) == tostring(payload.text) then
+                        table.remove(self.items, ti)
+                    end
+                end
                 table.insert(self.items, payload.text)
-                if self.on_change then self.on_change(self, #self.items, payload.text) end
+                -- Notify listeners
+                if self.on_change then self.on_change(self, nil, payload.text) end
+                constants.listbox_drop_handled = true
+                if core and core.log then core.log("[Lx_UI] Listbox dropped '" .. tostring(payload.text) .. "' into '" .. (self.title or "") .. "'") end
             end
-            constants.listbox_drag = nil
-        else
-            -- clear drag if released elsewhere
-            constants.listbox_drag = nil
         end
+        -- Do not clear here; a centralized cleanup will run after all listboxes rendered
     end
 end
 

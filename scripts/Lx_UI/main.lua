@@ -133,10 +133,10 @@ local function on_update()
                     -- Four listboxes: Default, Topbar, Sidebar, Palette
                     -- Build lists only once, then reuse
                     if not gui._lb_default then
-                        gui._lb_default = gui:AddListbox(ox, oy + 20, 180, 200, {}, function() end, "Default"):setType("launcher")
-                        gui._lb_topbar  = gui:AddListbox(ox + 190, oy + 20, 180, 200, {}, function() end, "Topbar"):setType("launcher")
-                        gui._lb_sidebar = gui:AddListbox(ox + 380, oy + 20, 180, 200, {}, function() end, "Sidebar"):setType("launcher")
-                        gui._lb_palette = gui:AddListbox(ox + 570, oy + 20, 180, 200, {}, function() end, "Palette"):setType("launcher")
+                        gui._lb_default = gui:AddListbox(ox, oy + 20, 180, 200, {}, function() end, "Default"):setType("launcher"):setDropSlot("default")
+                        gui._lb_topbar  = gui:AddListbox(ox + 190, oy + 20, 180, 200, {}, function() end, "Topbar"):setType("launcher"):setDropSlot("topbar")
+                        gui._lb_sidebar = gui:AddListbox(ox + 380, oy + 20, 180, 200, {}, function() end, "Sidebar"):setType("launcher"):setDropSlot("sidebar")
+                        gui._lb_palette = gui:AddListbox(ox + 570, oy + 20, 180, 200, {}, function() end, "Palette"):setType("launcher"):setDropSlot("palette")
                         gui._lb_default:set_visible_if(function() return gui._tabs:is_active("Settings") end)
                         gui._lb_topbar:set_visible_if(function() return gui._tabs:is_active("Settings") end)
                         gui._lb_sidebar:set_visible_if(function() return gui._tabs:is_active("Settings") end)
@@ -165,21 +165,7 @@ local function on_update()
                     gui._lb_topbar:set_items(top)
                     gui._lb_sidebar:set_items(side)
                     gui._lb_palette:set_items(pal)
-
-                    -- When a drop happens, our listboxes modify their own arrays; persist assignment map accordingly
-                    local function refresh_assignments()
-                        local function set_all(list, slot)
-                            for i=1,#list do assigned[list[i]] = slot end
-                        end
-                        set_all(gui._lb_default.items, "default")
-                        set_all(gui._lb_topbar.items,  "topbar")
-                        set_all(gui._lb_sidebar.items, "sidebar")
-                        set_all(gui._lb_palette.items, "palette")
-                    end
-                    -- Detect end of drag each frame: if no active drag but last known state differs, update
-                    if constants.listbox_drag == nil then
-                        refresh_assignments()
-                    end
+                    -- After repopulating, nothing else to do; assignments already synced above when no drag is active
                 else
                     -- Editor tab (placeholder)
                     local ox, oy = gui._tabs:get_content_origin()
