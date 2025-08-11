@@ -315,8 +315,8 @@ end
 function Input:render_proxy_menu()
   if not self.is_focused then return end
   if self._menu_text and self._menu_text.render then
-    -- render with empty label/tooltip so it stays invisible in menu but grabs input focus
-    self._menu_text:render(" ", " ")
+    -- render with a label so it becomes focusable by the core and grabs input routing
+    self._menu_text:render("Lx_UI Typing", "Routing capture field")
   end
 end
 
