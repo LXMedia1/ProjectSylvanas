@@ -279,7 +279,7 @@ function Designer:render(ox, oy)
         self.selected = c
         self.resizing = true
         self.resize_corner = "br"
-        self.dragging = false
+        self.dragging = true
         hit_any = true
         break
       end
