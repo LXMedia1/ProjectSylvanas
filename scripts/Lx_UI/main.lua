@@ -7,6 +7,7 @@ local persist = require("gui/utils/persist")
 local input = require("gui/functions/input")
 local rendering = require("gui/functions/rendering")
 local menu_module = require("gui/elements/menu")
+local ui_designer = require("gui/editor/designer")
 
 local Menu = menu_module.Menu
 
@@ -259,13 +260,10 @@ local function on_update()
                     -- Ensure GUI launcher filtering on-the-fly (renderers read constants.launcher_assignments)
                     -- After repopulating, nothing else to do; assignments already synced above when no drag is active
                 else
-                    -- Editor tab (placeholder)
+                    -- Editor tab
+                    if not gui._designer then gui._designer = ui_designer.new(gui) end
                     local ox, oy = gui._tabs:get_content_origin()
-                    local x = gui.x + ox
-                    local y = gui.y + oy
-                    core.graphics.text_2d("Editor:", constants.vec2.new(x, y), constants.FONT_SIZE, col, false)
-                    y = y + 22
-                    core.graphics.text_2d("Coming soon.", constants.vec2.new(x, y), constants.FONT_SIZE, soft, false)
+                    gui._designer:render(ox, oy)
                 end
             end
         end)
