@@ -273,26 +273,15 @@ function Designer:render(ox, oy)
     for i = #self.components, 1, -1 do
       local c = self.components[i]
       local cx, cy = self.gui.x + c.x, self.gui.y + c.y
-      -- when resize mode is active, check corners first
-      if self._resize_mode then
-        local hs = 10
-        local corners = {
-          {id="tl", x=cx-1,       y=cy-1},
-          {id="tr", x=cx+c.w-hs+1, y=cy-1},
-          {id="bl", x=cx-1,       y=cy+c.h-hs+1},
-          {id="br", x=cx+c.w-hs+1, y=cy+c.h-hs+1},
-        }
-        for _,h in ipairs(corners) do
-          if point_in_rect(m.x, m.y, h.x, h.y, hs, hs) then
-            self.selected = c
-            self.resizing = true
-            self.resize_corner = h.id
-            self.dragging = false
-            hit_any = true
-            break
-          end
-        end
-        if hit_any then break end
+      -- bottom-right resize handle always active when selected
+      local hs = 10
+      if point_in_rect(m.x, m.y, cx + c.w - hs, cy + c.h - hs, hs, hs) then
+        self.selected = c
+        self.resizing = true
+        self.resize_corner = "br"
+        self.dragging = false
+        hit_any = true
+        break
       end
       -- move/selection
       if point_in_rect(m.x, m.y, cx, cy, c.w, c.h) then
@@ -352,49 +341,10 @@ function Designer:render(ox, oy)
           local minw, minh = 20, 12
           local gx, gy = self.gui.x, self.gui.y
           local mx, my = m.x, m.y
-          if self.resize_corner == "br" then
-            local nw = (mx - gx) - sel.x
-            local nh = (my - gy) - sel.y
-            if nw > minw then sel.w = nw end
-            if nh > minh then sel.h = nh end
-          elseif self.resize_corner == "tr" then
-            local nw = (mx - gx) - sel.x
-            local nh = (sel.y + sel.h) - (my - gy)
-            if nw > minw then sel.w = nw end
-            if nh > minh then
-              local dy = (sel.y + sel.h) - (my - gy) - sel.h
-              sel.y = sel.y + dy
-              sel.h = nh
-            end
-          elseif self.resize_corner == "bl" then
-            local nw = (sel.x + sel.w) - (mx - gx)
-            local nh = (my - gy) - sel.y
-            if nw > minw then
-              local dx = (sel.x + sel.w) - (mx - gx) - sel.w
-              sel.x = sel.x + dx
-              sel.w = nw
-            end
-            if nh > minh then sel.h = nh end
-          elseif self.resize_corner == "tl" then
-            local nw = (sel.x + sel.w) - (mx - gx)
-            local nh = (sel.y + sel.h) - (my - gy)
-            if nw > minw then
-              local dx = (sel.x + sel.w) - (mx - gx) - sel.w
-              sel.x = sel.x + dx
-              sel.w = nw
-            end
-            if nh > minh then
-              local dy = (sel.y + sel.h) - (my - gy) - sel.h
-              sel.y = sel.y + dy
-              sel.h = nh
-            end
-          else
-            -- legacy single-handle behaviour (bottom-right)
-            local nw = (mx - gx) - sel.x
-            local nh = (my - gy) - sel.y
-            if nw > minw then sel.w = nw end
-            if nh > minh then sel.h = nh end
-          end
+          local nw = (mx - gx) - sel.x
+          local nh = (my - gy) - sel.y
+          if nw > minw then sel.w = nw end
+          if nh > minh then sel.h = nh end
         else
           self.selected.x = (m.x - self.gui.x) - self._offx
           self.selected.y = (m.y - self.gui.y) - self._offy
@@ -429,7 +379,7 @@ function Designer:render(ox, oy)
     local cm_y = self._ctx_y
     local cm_w = 160
     local row_h = 18
-    local items = { "Edit", "Resize", "Bring to front", "Duplicate", "Delete" }
+    local items = { "Edit", "Bring to front", "Duplicate", "Delete" }
     local bg = constants.color.new(16, 20, 34, 240)
     local bd = constants.color.new(32, 40, 70, 255)
     core.graphics.rect_2d_filled(constants.vec2.new(cm_x, cm_y), cm_w, row_h * #items + 8, bg, 6)
