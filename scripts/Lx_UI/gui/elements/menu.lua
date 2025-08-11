@@ -6,6 +6,7 @@ local Checkbox = require("gui/components/checkbox")
 local Panel = require("gui/components/panel")
 local Listbox = require("gui/components/listbox")
 local Combobox = require("gui/components/combobox")
+local Slider = require("gui/components/slider")
 
 local Menu = {}
 Menu.__index = Menu
@@ -98,6 +99,14 @@ function Menu:AddCombobox(x, y, w, h, items, selected_index, on_change, title)
     self._comboboxes = self._comboboxes or {}
     table.insert(self._comboboxes, cb)
     return cb
+end
+
+-- Slider (int or float). opts: { vertical=false, is_float=false, decimals=2, thickness=12 }
+function Menu:AddSlider(x, y, length, min_value, max_value, value, on_change, opts)
+    local s = Slider:new(self, x, y, length, min_value, max_value, value, on_change, opts)
+    self._sliders = self._sliders or {}
+    table.insert(self._sliders, s)
+    return s
 end
 
 return {

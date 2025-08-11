@@ -131,6 +131,12 @@ local function render_window(gui)
             if c and c.render then c:render() end
         end
     end
+    if gui._sliders then
+        for i = 1, #gui._sliders do
+            local s = gui._sliders[i]
+            if s and s.render then s:render() end
+        end
+    end
     -- Draw listboxes first (their panels), then draw comboboxes so dropdowns appear above
     if gui._listboxes then
         for i = 1, #gui._listboxes do
