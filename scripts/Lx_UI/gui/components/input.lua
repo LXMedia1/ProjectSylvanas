@@ -24,6 +24,11 @@ function Input:new(owner_gui, x, y, w, h, opts, on_change)
     o._blocker = core.menu.window(bid)
   end
   o._movement_locked = false
+  -- invisible core text_input to capture keyboard focus
+  o._proxy_id = "lxui_input_text_" .. tostring(owner_gui.unique_key or "gui") .. "_" .. tostring(math.random(1000000))
+  if core.menu and core.menu.text_input then
+    o._menu_text = core.menu.text_input(o._proxy_id, false)
+  end
   return o
 end
 
@@ -194,6 +199,10 @@ function Input:render_blocker()
       function()
         if self._blocker.add_artificial_item_bounds then
           self._blocker:add_artificial_item_bounds(constants.vec2.new(0,0), constants.vec2.new(self.w, self.h))
+        end
+        -- render a hidden text_input to grab keyboard focus
+        if self._menu_text and self._menu_text.render then
+          self._menu_text:render("", "")
         end
       end
     )
