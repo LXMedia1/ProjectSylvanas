@@ -32,16 +32,9 @@ function Input:new(owner_gui, x, y, w, h, opts, on_change)
   o._force_focus_frames = 0
   o._pre_focus_active = false
   o._pre_focus_deadline_ms = 0
-  -- small invisible menu window behind the input + a core text_input to grab focus
-  if core.menu and core.menu.window then
-    local bid = "lx_ui_input_blocker_" .. tostring(owner_gui.unique_key or "gui") .. "_" .. tostring(math.random(1000000))
-    o._blocker = core.menu.window(bid)
-  end
-  -- invisible core text_input to capture keyboard focus
-  o._proxy_id = "lxui_input_text_" .. tostring(owner_gui.unique_key or "gui") .. "_" .. tostring(math.random(1000000))
-  if core.menu and core.menu.text_input then
-    o._menu_text = core.menu.text_input(o._proxy_id, false)
-  end
+  -- Remove blocker and menu text_input capture (caused issues); rely on custom input only
+  o._blocker = nil
+  o._menu_text = nil
   return o
 end
 
@@ -166,19 +159,13 @@ function Input:render()
   -- focus handling
   local m = constants.mouse_state.position
   local over = helpers.is_point_in_rect(m.x, m.y, gx, gy, w, h)
-  -- cancel pre-focus after timeout
-  do
-    local now_t = (core.time and core.time()) or 0
-    if self._pre_focus_active and now_t > (self._pre_focus_deadline_ms or 0) then
-      self._pre_focus_active = false
-      if not self.is_focused then constants.typing_capture = nil end
-    end
-  end
+  -- cancel pre-focus after timeout (legacy no-op)
+  self._pre_focus_active = false
   if over and constants.mouse_state.left_clicked then
     -- Single-click to focus and start typing
     self.is_focused = true
     constants.is_typing = true
-    constants.typing_capture = { x = gx, y = gy, w = w, h = h }
+    constants.typing_capture = nil
     self._force_focus_frames = 6
     self._pre_focus_active = false
     if self.gui._text_inputs then
@@ -211,12 +198,10 @@ function Input:render()
       self._caret = clamp(index_from_mouse(self.text or "", x_rel, y_rel), 0, #(self.text or ""))
     elseif released then
       self._is_selecting = false
-      -- if caret interaction ended and we are no longer focused, hide blocker quickly
       if not self.is_focused then
         constants.is_typing = false
         constants.typing_capture = nil
         self._pre_focus_active = false
-        if self._blocker and self._blocker.set_visibility then self._blocker:set_visibility(false) end
       end
     end
     -- Enter handling
@@ -328,83 +313,9 @@ function Input:render()
   end
 end
 
--- Render an invisible menu window exactly over the input to block clicks
-function Input:render_proxy_menu()
-  if not (self.is_focused or self._pre_focus_active) or not (self._blocker and self.gui and self.gui.is_open) then
-    if self._blocker and self._blocker.set_visibility then self._blocker:set_visibility(false) end
-    return
-  end
-  -- Align a tiny menu window behind our input and render the menu textbox inside
-  local gx = self.gui.x + self.x
-  local gy = self.gui.y + self.y
-  local w, h = self.w, self.h
-  -- keep global capture up to date for menu context consumers
-  constants.typing_capture = { x = gx, y = gy, w = w, h = h }
-  if self._blocker.stop_forcing_size then self._blocker:stop_forcing_size() end
-  if self._blocker.set_visibility then self._blocker:set_visibility(true) end
-  if self._blocker.force_next_begin_window_pos then
-    self._blocker:force_next_begin_window_pos(constants.vec2.new(gx, gy))
-  end
-  if self._force_focus_frames and self._force_focus_frames > 0 and self._blocker.set_focus then
-    self._blocker:set_focus()
-  end
-  if self._blocker.set_next_window_min_size then
-    self._blocker:set_next_window_min_size(constants.vec2.new(w, h))
-  end
-  if self._blocker.force_window_size then
-    self._blocker:force_window_size(constants.vec2.new(w, h))
-  end
-  if self._blocker.set_next_window_padding then
-    self._blocker:set_next_window_padding(constants.vec2.new(0, 0))
-  end
-  if self._blocker.set_next_window_items_spacing then
-    self._blocker:set_next_window_items_spacing(constants.vec2.new(0, 0))
-  end
-  if self._blocker.set_next_window_items_inner_spacing then
-    self._blocker:set_next_window_items_inner_spacing(constants.vec2.new(0, 0))
-  end
-  if self._blocker.set_background_multicolored then
-    local c = constants.color.new(0,0,0,0)
-    self._blocker:set_background_multicolored(c,c,c,c)
-  end
-  if self._blocker.begin then
-    self._blocker:begin(
-      0,
-      false,
-      constants.color.new(0,0,0,0),
-      constants.color.new(0,0,0,0),
-      0,
-      function()
-        -- Ensure input capture in this small window
-        if self._blocker.set_next_widget_width then self._blocker:set_next_widget_width(w) end
-        if self._blocker.set_focus then self._blocker:set_focus() end
-        if self._blocker.block_input_capture then self._blocker:block_input_capture() end
-        if self._menu_text and self._menu_text.render then
-          -- Render the menu input exactly the same size with no label; make it virtually invisible
-          local tr_bg = constants.color.new(0,0,0,1)
-          local tr_bd = constants.color.new(0,0,0,1)
-          local tr_sel = constants.color.new(0,0,0,1)
-          local tr_text = constants.color.new(0,0,0,1)
-          if self._menu_text.render_custom then
-            self._menu_text:render_custom("", "", tr_bg, tr_bd, tr_sel, tr_text, 0)
-          else
-            self._menu_text:render("", "")
-          end
-        end
-      end
-    )
-  end
-  if self._force_focus_frames and self._force_focus_frames > 0 then
-    self._force_focus_frames = self._force_focus_frames - 1
-  end
-end
-
-function Input:ensure_hidden_if_inactive()
-  if self._blocker and self._blocker.set_visibility then
-    local should_hide = (not (self.is_focused or self._pre_focus_active)) or (not (self.gui and self.gui.is_open))
-    if should_hide then self._blocker:set_visibility(false) end
-  end
-end
+-- no menu proxy/blocker now
+function Input:render_proxy_menu() end
+function Input:ensure_hidden_if_inactive() end
 
 return Input
 
