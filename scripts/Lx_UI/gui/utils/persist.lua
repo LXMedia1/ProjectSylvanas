@@ -79,6 +79,10 @@ function Persist.load_plugin()
     ensure_dirs()
     local data = core.read_data_file(PLUGIN_FILE) or ""
     local t = parse(data)
+    if not t.default_launcher or (t.default_launcher ~= "sidebar" and t.default_launcher ~= "palette" and t.default_launcher ~= "topbar") then
+        t.default_launcher = "sidebar"
+    end
+    constants.__default_launcher = t.default_launcher
     return t
 end
 
@@ -97,9 +101,16 @@ function Persist.save_plugin(cfg)
     end
     if not need then return end
     core.create_data_file(PLUGIN_FILE)
-    core.write_data_file(PLUGIN_FILE, serialize(cfg))
+    local snap = {}
+    for k, v in pairs(cfg) do snap[k] = v end
+    if not snap.default_launcher then
+        snap.default_launcher = constants.__default_launcher or "sidebar"
+    else
+        constants.__default_launcher = snap.default_launcher
+    end
+    core.write_data_file(PLUGIN_FILE, serialize(snap))
     last_plugin_snapshot = {}
-    for k, v in pairs(cfg) do last_plugin_snapshot[k] = v end
+    for k, v in pairs(snap) do last_plugin_snapshot[k] = v end
 end
 
 function Persist.load_window(gui)

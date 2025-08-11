@@ -75,19 +75,12 @@ local function on_update()
             { id = "Settings", label = "Settings" },
             { id = "Editor", label = "Editor" }
         }, (constants.HEADER_HEIGHT or 24) + 6)
-        -- Small hint label under the tabs (component demo)
-        settings_gui._hint_label = settings_gui:AddLabel(
-            "Use tabs to switch sections",
-            16,
-            (constants.HEADER_HEIGHT or 24) + 6 + 20 + 6,
-            constants.color.new(220,220,230,220),
-            12
-        )
+        -- remove hint label per request
+        settings_gui._hint_label = nil
         settings_gui:set_render_callback(function(gui)
             local header_h = (constants.HEADER_HEIGHT or 24)
             local tabs_h = 20
-            local local_hint_y = header_h + 6 + tabs_h + 6
-            local base_y = local_hint_y + (constants.FONT_SIZE or 14) + 2 -- panel starts just below hint
+            local base_y = header_h + 6 + tabs_h + 6
             local x_text = 16
             local x_local = 16
             if core.graphics and core.graphics.text_2d then
@@ -144,26 +137,61 @@ local function on_update()
                     local ox, oy = gui._tabs:get_content_origin()
                     local x = gui.x + ox
                     local y = gui.y + oy
-                    -- Headline
-                    core.graphics.text_2d("Settings:", constants.vec2.new(x, y), constants.FONT_SIZE, col, false)
+                    -- Default launcher selector (checkboxes)
+                    local label_col = constants.color.white(255)
+                    local dy = 0
+                    local function draw_checkbox(lbl, key)
+                        local state = (constants.__default_launcher == key)
+                        local box_w, box_h = 14, 14
+                        local bx, by = x, y + dy
+                        if core.graphics.rect_2d_filled then
+                            local fill = state and constants.color.new(86, 120, 200, 240) or constants.color.new(36, 52, 96, 220)
+                            core.graphics.rect_2d_filled(constants.vec2.new(bx, by), box_w, box_h, fill, 3)
+                            core.graphics.rect_2d(constants.vec2.new(bx, by), box_w, box_h, constants.color.new(18,22,30,220), 1, 3)
+                        end
+                        if core.graphics.text_2d then
+                            core.graphics.text_2d(lbl, constants.vec2.new(bx + 20, by - 2), constants.FONT_SIZE, label_col, false)
+                        end
+                        local m = constants.mouse_state.position
+                        local over = (m.x >= bx and m.x <= bx + box_w and m.y >= by and m.y <= by + box_h)
+                        if over and constants.mouse_state.left_clicked then
+                            constants.__default_launcher = key
+                            -- persist in plugin cfg
+                            persist.save_plugin({
+                                launcher_mode = constants.launcher_mode,
+                                sidebar_top_offset = constants.SIDEBAR_TOP_OFFSET or 80,
+                                palette_top_offset = constants.PALETTE_TOP_OFFSET or 120,
+                                palette_left_offset = constants.PALETTE_LEFT_OFFSET or 0,
+                                default_launcher = key
+                            })
+                        end
+                        dy = dy + 20
+                    end
+                    draw_checkbox("Selected Default:", constants.__default_launcher or "sidebar")
+                    -- clickable options beneath label
+                    draw_checkbox("Sidebar", "sidebar")
+                    draw_checkbox("Palette", "palette")
+                    draw_checkbox("Topbar", "topbar")
 
                     -- Four listboxes: Default, Topbar, Sidebar, Palette
                     -- Build lists only once, then reuse
                     if not gui._lb_default then
-                        gui._lb_default = gui:AddListbox(ox, oy + 20, 180, 200, {}, function() end, "Default"):setType("launcher"):setDropSlot("default")
-                        gui._lb_topbar  = gui:AddListbox(ox + 190, oy + 20, 180, 200, {}, function() end, "Topbar"):setType("launcher"):setDropSlot("topbar")
-                        gui._lb_sidebar = gui:AddListbox(ox + 380, oy + 20, 180, 200, {}, function() end, "Sidebar"):setType("launcher"):setDropSlot("sidebar")
-                        gui._lb_palette = gui:AddListbox(ox + 570, oy + 20, 180, 200, {}, function() end, "Palette"):setType("launcher"):setDropSlot("palette")
+                        local list_y = oy + 20 + 70
+                        gui._lb_default = gui:AddListbox(ox, list_y, 180, 200, {}, function() end, "Default"):setType("launcher"):setDropSlot("default")
+                        gui._lb_topbar  = gui:AddListbox(ox + 190, list_y, 180, 200, {}, function() end, "Topbar"):setType("launcher"):setDropSlot("topbar")
+                        gui._lb_sidebar = gui:AddListbox(ox + 380, list_y, 180, 200, {}, function() end, "Sidebar"):setType("launcher"):setDropSlot("sidebar")
+                        gui._lb_palette = gui:AddListbox(ox + 570, list_y, 180, 200, {}, function() end, "Palette"):setType("launcher"):setDropSlot("palette")
                         gui._lb_default:set_visible_if(function() return gui._tabs:is_active("Settings") end)
                         gui._lb_topbar:set_visible_if(function() return gui._tabs:is_active("Settings") end)
                         gui._lb_sidebar:set_visible_if(function() return gui._tabs:is_active("Settings") end)
                         gui._lb_palette:set_visible_if(function() return gui._tabs:is_active("Settings") end)
                     end
                     -- Keep positions synced to tab origin
-                    gui._lb_default.x, gui._lb_default.y = ox, oy + 20
-                    gui._lb_topbar.x,  gui._lb_topbar.y  = ox + 190, oy + 20
-                    gui._lb_sidebar.x, gui._lb_sidebar.y = ox + 380, oy + 20
-                    gui._lb_palette.x, gui._lb_palette.y = ox + 570, oy + 20
+                    local list_y = oy + 20 + 70
+                    gui._lb_default.x, gui._lb_default.y = ox, list_y
+                    gui._lb_topbar.x,  gui._lb_topbar.y  = ox + 190, list_y
+                    gui._lb_sidebar.x, gui._lb_sidebar.y = ox + 380, list_y
+                    gui._lb_palette.x, gui._lb_palette.y = ox + 570, list_y
 
                     -- Populate from current registered guis and assignments
                     local assigned = constants.launcher_assignments
