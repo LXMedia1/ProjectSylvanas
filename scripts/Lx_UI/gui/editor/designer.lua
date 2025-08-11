@@ -268,16 +268,33 @@ function Designer:render(ox, oy)
     for i = #self.components, 1, -1 do
       local c = self.components[i]
       local cx, cy = self.gui.x + c.x, self.gui.y + c.y
-      if point_in_rect(m.x, m.y, cx + c.w - 10, cy + c.h - 10, 10, 10) then
-        self.selected = c
-        self.resizing = true
-        self.dragging = false
-        hit_any = true
-        break
-      elseif point_in_rect(m.x, m.y, cx, cy, c.w, c.h) then
+      -- when resize mode is active, check corners first
+      if self._resize_mode then
+        local hs = 10
+        local corners = {
+          {id="tl", x=cx-1,       y=cy-1},
+          {id="tr", x=cx+c.w-hs+1, y=cy-1},
+          {id="bl", x=cx-1,       y=cy+c.h-hs+1},
+          {id="br", x=cx+c.w-hs+1, y=cy+c.h-hs+1},
+        }
+        for _,h in ipairs(corners) do
+          if point_in_rect(m.x, m.y, h.x, h.y, hs, hs) then
+            self.selected = c
+            self.resizing = true
+            self.resize_corner = h.id
+            self.dragging = false
+            hit_any = true
+            break
+          end
+        end
+        if hit_any then break end
+      end
+      -- move/selection
+      if point_in_rect(m.x, m.y, cx, cy, c.w, c.h) then
         self.selected = c
         self.dragging = true
         self.resizing = false
+        self.resize_corner = nil
         self._offx = m.x - cx
         self._offy = m.y - cy
         hit_any = true
@@ -326,10 +343,53 @@ function Designer:render(ox, oy)
     if self.dragging then
       if down then
         if self.resizing then
-          local nw = (m.x - self.gui.x) - self.selected.x
-          local nh = (m.y - self.gui.y) - self.selected.y
-          if nw > 20 then self.selected.w = nw end
-          if nh > 12 then self.selected.h = nh end
+          local sel = self.selected
+          local minw, minh = 20, 12
+          local gx, gy = self.gui.x, self.gui.y
+          local mx, my = m.x, m.y
+          if self.resize_corner == "br" then
+            local nw = (mx - gx) - sel.x
+            local nh = (my - gy) - sel.y
+            if nw > minw then sel.w = nw end
+            if nh > minh then sel.h = nh end
+          elseif self.resize_corner == "tr" then
+            local nw = (mx - gx) - sel.x
+            local nh = (sel.y + sel.h) - (my - gy)
+            if nw > minw then sel.w = nw end
+            if nh > minh then
+              local dy = (sel.y + sel.h) - (my - gy) - sel.h
+              sel.y = sel.y + dy
+              sel.h = nh
+            end
+          elseif self.resize_corner == "bl" then
+            local nw = (sel.x + sel.w) - (mx - gx)
+            local nh = (my - gy) - sel.y
+            if nw > minw then
+              local dx = (sel.x + sel.w) - (mx - gx) - sel.w
+              sel.x = sel.x + dx
+              sel.w = nw
+            end
+            if nh > minh then sel.h = nh end
+          elseif self.resize_corner == "tl" then
+            local nw = (sel.x + sel.w) - (mx - gx)
+            local nh = (sel.y + sel.h) - (my - gy)
+            if nw > minw then
+              local dx = (sel.x + sel.w) - (mx - gx) - sel.w
+              sel.x = sel.x + dx
+              sel.w = nw
+            end
+            if nh > minh then
+              local dy = (sel.y + sel.h) - (my - gy) - sel.h
+              sel.y = sel.y + dy
+              sel.h = nh
+            end
+          else
+            -- legacy single-handle behaviour (bottom-right)
+            local nw = (mx - gx) - sel.x
+            local nh = (my - gy) - sel.y
+            if nw > minw then sel.w = nw end
+            if nh > minh then sel.h = nh end
+          end
         else
           self.selected.x = (m.x - self.gui.x) - self._offx
           self.selected.y = (m.y - self.gui.y) - self._offy
@@ -337,6 +397,7 @@ function Designer:render(ox, oy)
       else
         self.dragging = false
         self.resizing = false
+        self.resize_corner = nil
       end
   end
   end
@@ -363,7 +424,7 @@ function Designer:render(ox, oy)
     local cm_y = self._ctx_y
     local cm_w = 160
     local row_h = 18
-    local items = { "Edit size", "Resize mode", "Bring to front", "Duplicate", "Delete" }
+    local items = { "Resize", "Bring to front", "Duplicate", "Delete" }
     local bg = constants.color.new(16, 20, 34, 240)
     local bd = constants.color.new(32, 40, 70, 255)
     core.graphics.rect_2d_filled(constants.vec2.new(cm_x, cm_y), cm_w, row_h * #items + 8, bg, 6)
@@ -378,13 +439,9 @@ function Designer:render(ox, oy)
       core.graphics.text_2d(items[i], constants.vec2.new(cm_x + 8, my - 1), constants.FONT_SIZE, constants.color.white(255), false)
       if over and constants.mouse_state.left_clicked then
         local act = items[i]
-        if act == "Edit size" then
-          self._edit_size_popup = true
-          self._edit_size_x, self._edit_size_y = cm_x + cm_w + 6, cm_y
-          self._ctx_open = false
-        elseif act == "Resize mode" then
-          -- enter resize mode: next left drag inside the selected component resizes
-          self._resize_mode = true
+        if act == "Resize" then
+          -- toggle resize mode; resizing works by dragging the corner handles
+          self._resize_mode = not not (not self._resize_mode)
           self._ctx_open = false
         elseif act == "Bring to front" then
           -- move target to end of array
@@ -417,43 +474,93 @@ function Designer:render(ox, oy)
     end
   end
 
-  -- Edit size popup
-  if self._edit_size_popup and self.selected then
-    local ex = self._edit_size_x or (self.gui.x + 20)
-    local ey = self._edit_size_y or (self.gui.y + 40)
-    local pw = 180
-    local ph = 70
+  -- Top Edit button for properties (opens a lightweight popup)
+  do
+    local show_btn = true
+    local bx, by = canvas_x + 8, canvas_y + 8
+    local bw, bh = 64, 18
+    core.graphics.rect_2d_filled(constants.vec2.new(bx, by), bw, bh, constants.color.new(36,52,96,220), 4)
+    core.graphics.rect_2d(constants.vec2.new(bx, by), bw, bh, constants.color.new(32,40,70,255), 1, 4)
+    local label = "Edit"
+    local tw = (core.graphics.get_text_width and core.graphics.get_text_width(label, constants.FONT_SIZE, 0)) or 24
+    local tx = bx + math.floor((bw - tw) / 2)
+    local ty = by + math.floor((bh - (constants.FONT_SIZE or 14)) / 2) - 1
+    core.graphics.text_2d(label, constants.vec2.new(tx, ty), constants.FONT_SIZE, constants.color.white(255), false)
+    if point_in_rect(m.x, m.y, bx, by, bw, bh) and constants.mouse_state.left_clicked then
+      self._edit_props_popup = not self._edit_props_popup
+      self._props_x, self._props_y = bx, by + bh + 6
+    end
+  end
+
+  -- Properties popup (simple controls)
+  if self._edit_props_popup and self.selected then
+    local ex = self._props_x or (canvas_x + 8)
+    local ey = self._props_y or (canvas_y + 30)
+    local pw = 220
+    local ph = 100
     local bg = constants.color.new(16, 20, 34, 240)
     local bd = constants.color.new(32, 40, 70, 255)
     core.graphics.rect_2d_filled(constants.vec2.new(ex, ey), pw, ph, bg, 6)
     core.graphics.rect_2d(constants.vec2.new(ex, ey), pw, ph, bd, 1, 6)
-    core.graphics.text_2d("Width", constants.vec2.new(ex + 8, ey + 6), constants.FONT_SIZE, constants.color.white(255), false)
-    core.graphics.text_2d("Height", constants.vec2.new(ex + 8, ey + 32), constants.FONT_SIZE, constants.color.white(255), false)
-    local function draw_stepper(x, y, value, cb)
+    local y = ey + 6
+    core.graphics.text_2d("Properties", constants.vec2.new(ex + 8, y), constants.FONT_SIZE, constants.color.white(255), false)
+    y = y + 18
+    -- Text/title cycler for text-capable components
+    local k = self.selected.kind
+    if k == "label" or k == "button" or k == "checkbox" or k == "combobox" or k == "panel" then
+      core.graphics.text_2d("Text", constants.vec2.new(ex + 8, y), constants.FONT_SIZE, constants.color.white(255), false)
       local bw, bh = 18, 16
-      local minus_x = x
-      local plus_x = x + 60
+      local minus_x = ex + 60
+      local plus_x = ex + 60 + 60
+      local disp = self.selected.text or self.selected.title or ""
       core.graphics.rect_2d_filled(constants.vec2.new(minus_x, y), bw, bh, constants.color.new(36,52,96,220), 4)
       core.graphics.rect_2d_filled(constants.vec2.new(plus_x, y), bw, bh, constants.color.new(36,52,96,220), 4)
       core.graphics.text_2d("-", constants.vec2.new(minus_x + 6, y - 2), constants.FONT_SIZE, constants.color.white(255), false)
       core.graphics.text_2d("+", constants.vec2.new(plus_x + 5, y - 2), constants.FONT_SIZE, constants.color.white(255), false)
-      core.graphics.text_2d(tostring(value), constants.vec2.new(x + 24, y - 2), constants.FONT_SIZE, constants.color.white(255), false)
-      local mx, my = m.x, m.y
-      if point_in_rect(mx, my, minus_x, y, bw, bh) and constants.mouse_state.left_clicked then cb(-10) end
-      if point_in_rect(mx, my, plus_x, y, bw, bh) and constants.mouse_state.left_clicked then cb(10) end
+      core.graphics.text_2d(disp, constants.vec2.new(ex + 84, y - 2), constants.FONT_SIZE, constants.color.white(255), false)
+      if point_in_rect(m.x, m.y, minus_x, y, bw, bh) and constants.mouse_state.left_clicked then
+        -- shorten text
+        local s = tostring(disp)
+        if #s > 0 then s = string.sub(s, 1, math.max(0, #s - 1)) end
+        if k == "panel" then self.selected.title = s else self.selected.text = s end
+      end
+      if point_in_rect(m.x, m.y, plus_x, y, bw, bh) and constants.mouse_state.left_clicked then
+        -- append placeholder character
+        local s = tostring(disp)
+        self._next_char = self._next_char or "*"
+        s = s .. self._next_char
+        if k == "panel" then self.selected.title = s else self.selected.text = s end
+      end
+      y = y + 22
     end
-    draw_stepper(ex + 70, ey + 6, self.selected.w, function(delta) self.selected.w = math.max(20, self.selected.w + delta) end)
-    draw_stepper(ex + 70, ey + 32, self.selected.h, function(delta) self.selected.h = math.max(12, self.selected.h + delta) end)
+    -- Width/Height steppers
+    core.graphics.text_2d("Width", constants.vec2.new(ex + 8, y), constants.FONT_SIZE, constants.color.white(255), false)
+    local function draw_stepper(x, y0, value, cb)
+      local bw, bh = 18, 16
+      local minus_x = x
+      local plus_x = x + 60
+      core.graphics.rect_2d_filled(constants.vec2.new(minus_x, y0), bw, bh, constants.color.new(36,52,96,220), 4)
+      core.graphics.rect_2d_filled(constants.vec2.new(plus_x, y0), bw, bh, constants.color.new(36,52,96,220), 4)
+      core.graphics.text_2d("-", constants.vec2.new(minus_x + 6, y0 - 2), constants.FONT_SIZE, constants.color.white(255), false)
+      core.graphics.text_2d("+", constants.vec2.new(plus_x + 5, y0 - 2), constants.FONT_SIZE, constants.color.white(255), false)
+      core.graphics.text_2d(tostring(value), constants.vec2.new(x + 24, y0 - 2), constants.FONT_SIZE, constants.color.white(255), false)
+      if point_in_rect(m.x, m.y, minus_x, y0, bw, bh) and constants.mouse_state.left_clicked then cb(-10) end
+      if point_in_rect(m.x, m.y, plus_x, y0, bw, bh) and constants.mouse_state.left_clicked then cb(10) end
+    end
+    draw_stepper(ex + 60, y, self.selected.w, function(delta) self.selected.w = math.max(20, self.selected.w + delta) end)
+    y = y + 22
+    core.graphics.text_2d("Height", constants.vec2.new(ex + 8, y), constants.FONT_SIZE, constants.color.white(255), false)
+    draw_stepper(ex + 60, y, self.selected.h, function(delta) self.selected.h = math.max(12, self.selected.h + delta) end)
     -- close button
     local cx, cy, cw, ch = ex + pw - 48, ey + ph - 22, 40, 18
     core.graphics.rect_2d_filled(constants.vec2.new(cx, cy), cw, ch, constants.color.new(86,120,200,230), 4)
     core.graphics.text_2d("Close", constants.vec2.new(cx + 8, cy - 2), constants.FONT_SIZE, constants.color.white(255), false)
     if point_in_rect(m.x, m.y, cx, cy, cw, ch) and constants.mouse_state.left_clicked then
-      self._edit_size_popup = false
+      self._edit_props_popup = false
     end
     -- close if click outside
     if constants.mouse_state.left_clicked and not point_in_rect(m.x, m.y, ex, ey, pw, ph) then
-      self._edit_size_popup = false
+      self._edit_props_popup = false
     end
   end
 
