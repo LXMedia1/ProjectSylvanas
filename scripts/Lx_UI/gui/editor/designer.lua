@@ -6,13 +6,13 @@ Designer.__index = Designer
 local VK_DELETE = 0x2E
 
 local palette_defs = {
-  { id = "label",    name = "Label",    w = 140, h = 18 },
-  { id = "button",   name = "Button",   w = 120, h = 26 },
-  { id = "checkbox", name = "Checkbox", w = 140, h = 20 },
-  { id = "combobox", name = "Combobox", w = 160, h = 24 },
-  { id = "slider",   name = "Slider",   w = 180, h = 12 },
-  { id = "listbox",  name = "Listbox",  w = 180, h = 160 },
-  { id = "panel",    name = "Panel",    w = 220, h = 160 },
+  { id = "label",    name = "Label",    w = 140, h = 18,  cat = "Basic" },
+  { id = "button",   name = "Button",   w = 120, h = 26,  cat = "Basic" },
+  { id = "checkbox", name = "Checkbox", w = 140, h = 20,  cat = "Basic" },
+  { id = "combobox", name = "Combobox", w = 160, h = 24,  cat = "Inputs" },
+  { id = "slider",   name = "Slider",   w = 180, h = 12,  cat = "Inputs" },
+  { id = "listbox",  name = "Listbox",  w = 180, h = 160, cat = "Inputs" },
+  { id = "panel",    name = "Panel",    w = 220, h = 160, cat = "Containers" },
 }
 
 function Designer:new(owner_gui)
@@ -116,6 +116,11 @@ function Designer:render(ox, oy)
   local gx, gy = self.gui.x, self.gui.y
   local base_x = gx + ox
   local base_y = gy + oy
+  -- capture mouse state early so we can use edge flags in palette too
+  local m = constants.mouse_state.position
+  local down = constants.mouse_state.left_down
+  local pressed = (down and not self._mouse_was_down)
+  local released = (self._mouse_was_down and not down)
   local content_w, content_h = 0, 0
   if self.gui._tabs and self.gui._tabs.get_content_size then
     content_w, content_h = self.gui._tabs:get_content_size()
@@ -123,40 +128,73 @@ function Designer:render(ox, oy)
     content_w = self.gui.width - (ox + 16)
     content_h = self.gui.height - (oy + 16)
   end
-  local toolbar_h = 36
-  local palette_y = base_y + 8
-  local canvas_x, canvas_y = base_x, base_y + toolbar_h
-  local canvas_w, canvas_h = content_w, math.max(0, content_h - toolbar_h)
+  -- Left palette panel
+  local palette_w = 200
+  local palette_x = base_x
+  local palette_y = base_y
+  local canvas_x, canvas_y = base_x + palette_w + 10, base_y
+  local canvas_w, canvas_h = math.max(0, content_w - palette_w - 10), content_h
 
-  -- Toolbar palette
-  local px = base_x
-  for i, d in ipairs(palette_defs) do
-    local bw, bh = 90, 20
-    local over = point_in_rect(constants.mouse_state.position.x, constants.mouse_state.position.y, px, palette_y, bw, bh)
-    local active = (self.active_tool == d.id)
-    local bg = active and constants.color.new(86,120,200,230) or constants.color.new(36,52,96,220)
-    core.graphics.rect_2d_filled(constants.vec2.new(px, palette_y), bw, bh, bg, 4)
-    core.graphics.rect_2d(constants.vec2.new(px, palette_y), bw, bh, constants.color.new(32,40,70,255), 1, 4)
-    core.graphics.text_2d(d.name, constants.vec2.new(px + 8, palette_y - 2), constants.Font_SIZE or constants.FONT_SIZE, constants.color.white(255), false)
-    if over and constants.mouse_state.left_down then self.active_tool = d.id end
-    -- start drag from palette on click
-    if over and constants.mouse_state.left_clicked then
-      self._palette_dragging = true
-      self._palette_drag_kind = d.id
-      self._drag_w = d.w
-      self._drag_h = d.h
+  -- Draw palette left panel with categories
+  do
+    local col_bg = constants.color.new(14, 18, 30, 220)
+    local col_bd = constants.color.new(32, 40, 70, 255)
+    core.graphics.rect_2d_filled(constants.vec2.new(palette_x, palette_y), palette_w, content_h, col_bg, 6)
+    core.graphics.rect_2d(constants.vec2.new(palette_x, palette_y), palette_w, content_h, col_bd, 1, 6)
+    -- Title
+    if core.graphics.text_2d then
+      core.graphics.text_2d("Components", constants.vec2.new(palette_x + 10, palette_y + 6), constants.FONT_SIZE, constants.color.white(255), false)
     end
-    px = px + bw + 6
+    local list_y = palette_y + 26
+    -- Build categories map
+    local cats = {}
+    for i = 1, #palette_defs do
+      local d = palette_defs[i]
+      local c = d.cat or "Other"
+      cats[c] = cats[c] or {}
+      table.insert(cats[c], d)
+    end
+    -- Deterministic order
+    local order = { "Basic", "Inputs", "Containers", "Other" }
+    for oi = 1, #order do
+      local cname = order[oi]
+      local arr = cats[cname]
+      if arr and #arr > 0 then
+        -- Category header
+        local hcol = constants.color.new(56, 80, 140, 230)
+        core.graphics.rect_2d_filled(constants.vec2.new(palette_x + 6, list_y), palette_w - 12, 18, hcol, 4)
+        core.graphics.text_2d(cname, constants.vec2.new(palette_x + 12, list_y + 2), constants.FONT_SIZE, constants.color.white(255), false)
+        list_y = list_y + 22
+        -- Items
+        for ii = 1, #arr do
+          local d = arr[ii]
+          local ih = 18
+          local iw = palette_w - 16
+          local ix = palette_x + 8
+          local iy = list_y
+          local over = point_in_rect(constants.mouse_state.position.x, constants.mouse_state.position.y, ix, iy, iw, ih)
+          local bg = over and constants.color.new(76, 110, 180, 255) or constants.color.new(36, 52, 96, 220)
+          core.graphics.rect_2d_filled(constants.vec2.new(ix, iy), iw, ih, bg, 4)
+          core.graphics.rect_2d(constants.vec2.new(ix, iy), iw, ih, col_bd, 1, 4)
+          core.graphics.text_2d(d.name, constants.vec2.new(ix + 8, iy - 1), constants.FONT_SIZE, constants.color.white(255), false)
+          -- start drag on press
+          if over and pressed then
+            self._palette_dragging = true
+            self._palette_drag_kind = d.id
+            self._drag_w = d.w
+            self._drag_h = d.h
+          end
+          list_y = list_y + ih + 6
+        end
+        list_y = list_y + 6
+      end
+    end
   end
 
   -- Canvas background
   core.graphics.rect_2d_filled(constants.vec2.new(canvas_x, canvas_y), canvas_w, canvas_h, constants.color.new(10, 12, 18, 160), 6)
   core.graphics.rect_2d(constants.vec2.new(canvas_x, canvas_y), canvas_w, canvas_h, constants.color.new(32,40,70,255), 1, 6)
 
-  local m = constants.mouse_state.position
-  local down = constants.mouse_state.left_down
-  local pressed = (down and not self._mouse_was_down)
-  local released = (self._mouse_was_down and not down)
   self._mouse_was_down = down
 
   -- Handle palette drag-and-drop creation
