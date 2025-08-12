@@ -10,6 +10,34 @@ local Settings = {
 -- Font sizes
 local FONT_SIZE = 14
 
+-- Simple theme system (can be extended)
+local Themes = {
+    basic = {
+        font = {
+            base = 13,
+            label = 12,
+            tab = 13,
+            button = 13,
+            checkbox = 12
+        },
+        text = {
+            normal = nil, -- defaults to white(245)
+            active = nil, -- defaults to white(255)
+            muted = nil   -- defaults to white(220)
+        },
+        corner_radius = { sm = 4, md = 6 },
+        spacing = { x = 8, y = 6 }
+    }
+}
+
+local Theme = Themes.basic
+
+local function set_theme(name)
+    if Themes[name] then
+        Theme = Themes[name]
+    end
+end
+
 local registered_guis = {}
 local gui_states = {}
 
@@ -24,6 +52,9 @@ local palette_rect = nil
 local launcher_assignments = {}
 local listbox_drag = nil
 local listbox_drop_handled = false
+local hot_zones = {}
+local capture_deadline_ms = 0
+local mouse_capture_active = false
 
 local mouse_state = {
     position = vec2.new(0, 0),
@@ -56,9 +87,15 @@ return {
     launcher_assignments = launcher_assignments,
     listbox_drag = listbox_drag,
     listbox_drop_handled = listbox_drop_handled,
+    hot_zones = hot_zones,
+    capture_deadline_ms = capture_deadline_ms,
+    mouse_capture_active = mouse_capture_active,
     mouse_state = mouse_state,
     is_typing = is_typing,
     typing_capture = typing_capture,
+    Theme = Theme,
+    Themes = Themes,
+    set_theme = set_theme,
     launcher_mode = 1, -- 1=palette, 2=sidebar, 3=topbar
     -- Common layout
     HEADER_HEIGHT = 24,

@@ -35,6 +35,9 @@ function Input:new(owner_gui, x, y, w, h, opts, on_change)
   -- Remove blocker and menu text_input capture (caused issues); rely on custom input only
   o._blocker = nil
   o._menu_text = nil
+  o._frame_tick = 0
+  o._last_clock = nil
+  o._time_unit = "auto" -- "sec" or "ms" decided at runtime
   return o
 end
 
@@ -82,12 +85,24 @@ local function measure(text)
 end
 
 local function split_lines_with_index(text)
+  -- Robustly split by '\n' without adding an extra trailing empty line unless the
+  -- source string actually ends with a newline.
+  text = text or ""
   local lines, starts = {}, {}
-  local idx = 1
-  for line in string.gmatch(text or "", "[^\n]*") do
-    table.insert(lines, line)
-    table.insert(starts, idx)
-    idx = idx + #line + 1 -- +1 for newline
+  local pos = 1
+  local start_idx = 1
+  while true do
+    local s, e = string.find(text, "\n", pos, true)
+    if not s then
+      table.insert(lines, string.sub(text, pos))
+      table.insert(starts, start_idx)
+      break
+    else
+      table.insert(lines, string.sub(text, pos, s - 1))
+      table.insert(starts, start_idx)
+      pos = e + 1
+      start_idx = e + 1
+    end
   end
   return lines, starts
 end
@@ -140,6 +155,12 @@ local function key_edge(self, vk)
   return down and not prev
 end
 
+local function is_shift_down()
+  if not core.input or not core.input.is_key_pressed then return false end
+  local VK_SHIFT, VK_LSHIFT, VK_RSHIFT = 0x10, 0xA0, 0xA1
+  return core.input.is_key_pressed(VK_SHIFT) or core.input.is_key_pressed(VK_LSHIFT) or core.input.is_key_pressed(VK_RSHIFT)
+end
+
 function Input:render()
   if not (self.gui and self.gui.is_open and self:is_visible()) then return end
   local gx = self.gui.x + self.x
@@ -182,6 +203,10 @@ function Input:render()
 
   -- input handling when focused
   if self.is_focused and core.graphics and core.graphics.translate_vkey_to_string then
+    -- If external code updated the string (e.g., another window reusing the same Input instance),
+    -- keep caret within bounds and clear selection to avoid stale indices.
+    if self._caret > #(self.text or "") then self._caret = #(self.text or "") end
+    if self._sel_anchor and self._sel_anchor > #(self.text or "") then self._sel_anchor = nil end
     -- mouse press/release within input to place caret and selection
     local pressed = (constants.mouse_state.left_down and not self._mouse_was_down)
     local released = (self._mouse_was_down and not constants.mouse_state.left_down)
@@ -198,6 +223,8 @@ function Input:render()
       self._caret = clamp(index_from_mouse(self.text or "", x_rel, y_rel), 0, #(self.text or ""))
     elseif released then
       self._is_selecting = false
+      -- Clear zero-width selection to avoid phantom highlight overwriting next char
+      if self._sel_anchor == self._caret then self._sel_anchor = nil end
       if not self.is_focused then
         constants.is_typing = false
         constants.typing_capture = nil
@@ -219,7 +246,32 @@ function Input:render()
     end
     -- Backspace
     local VK_BACK = 0x08
-    local now_ms = (core.time and core.time()) or 0
+    -- Use ms clock if available, otherwise fall back to frame ticks for repeat timing
+    local time_now = (core.time and core.time()) or nil
+    local using_frames = not time_now
+    if not using_frames then
+      local prev = self._last_clock
+      if prev then
+        local delta = time_now - prev
+        if delta and delta > 0 then
+          -- Heuristic: <1.0 per frame => seconds; otherwise ms
+          self._time_unit = (delta < 1.0) and "sec" or "ms"
+        end
+      end
+      self._last_clock = time_now
+    end
+    if using_frames then self._frame_tick = (self._frame_tick or 0) + 1 end
+    local now_clock = using_frames and self._frame_tick or time_now
+    local delay_initial, delay_repeat
+    if using_frames then
+      delay_initial, delay_repeat = 20, 3
+    else
+      if self._time_unit == "sec" then
+        delay_initial, delay_repeat = 0.35, 0.05
+      else
+        delay_initial, delay_repeat = 350, 50
+      end
+    end
     local bs_now = core.input and core.input.is_key_pressed and core.input.is_key_pressed(VK_BACK)
     local function delete_one()
       local txt = self.text or ""
@@ -233,39 +285,55 @@ function Input:render()
         if self._caret > 0 then
           self.text = (string.sub(txt, 1, self._caret - 1) or "") .. (string.sub(txt, self._caret + 1) or "")
           self._caret = self._caret - 1
+          self._sel_anchor = nil
         end
       end
       if self.on_change then self.on_change(self, self.text) end
     end
     if bs_now and not self._bs_prev_down then
       delete_one()
-      self._bs_next_repeat = now_ms + 350
-    elseif bs_now and self._bs_prev_down and now_ms >= (self._bs_next_repeat or now_ms + 1e9) then
+      self._bs_next_repeat = now_clock + delay_initial
+    elseif bs_now and self._bs_prev_down and now_clock >= (self._bs_next_repeat or (now_clock + 1000000)) then
       delete_one()
-      self._bs_next_repeat = now_ms + 50
+      self._bs_next_repeat = now_clock + delay_repeat
     end
     self._bs_prev_down = bs_now
-    -- basic character input: scan keys 0x20..0x5A
-    for vk = 0x20, 0x5A do
-      if vk ~= VK_RETURN and vk ~= VK_BACK then
+    -- basic character input: alnum + OEM punctuation ranges
+    local function insert_char(ch)
+      if not ch or ch == "" then return end
+      local txt = self.text or ""
+      local s, e = self._sel_anchor, self._caret
+      if s and s ~= e then
+        local a, b = math.min(s, e), math.max(s, e)
+        self.text = (string.sub(txt, 1, a) or "") .. ch .. (string.sub(txt, b + 1) or "")
+        self._caret = a + #ch
+        self._sel_anchor = nil
+      else
+        self.text = (string.sub(txt, 1, self._caret) or "") .. ch .. (string.sub(txt, self._caret + 1) or "")
+        self._caret = self._caret + #ch
+        self._sel_anchor = nil
+      end
+      if self.on_change then self.on_change(self, self.text) end
+    end
+    -- Broad scan fallback: try all VKeys, rely on translate for layout-specific glyphs
+    for vk = 0x01, 0xFE do
+      if vk ~= VK_RETURN and vk ~= VK_BACK and vk ~= 0x20 then
         if key_edge(self, vk) then
-          local ch = core.graphics.translate_vkey_to_string(vk)
-          if ch and ch ~= "" then
-            local txt = self.text or ""
-            local s, e = self._sel_anchor, self._caret
-            if s and s ~= e then
-              local a, b = math.min(s, e), math.max(s, e)
-              self.text = (string.sub(txt, 1, a) or "") .. ch .. (string.sub(txt, b + 1) or "")
-              self._caret = a + #ch
-              self._sel_anchor = nil
-            else
-              self.text = (string.sub(txt, 1, self._caret) or "") .. ch .. (string.sub(txt, self._caret + 1) or "")
-              self._caret = self._caret + #ch
+          local ch = core.graphics and core.graphics.translate_vkey_to_string and core.graphics.translate_vkey_to_string(vk) or nil
+          if ch and #ch == 1 then
+            local by = string.byte(ch)
+            if by >= 65 and by <= 90 and not is_shift_down() then
+              ch = string.lower(ch)
             end
-            if self.on_change then self.on_change(self, self.text) end
+            insert_char(ch)
           end
         end
       end
+    end
+    -- Space key explicit mapping (VK 0x20)
+    local VK_SPACE = 0x20
+    if key_edge(self, VK_SPACE) then
+      insert_char(" ")
     end
   end
 
@@ -277,12 +345,14 @@ function Input:render()
   local lines, starts = split_lines_with_index(text)
   -- draw selection if exists
   if self.is_focused and self._sel_anchor and self._sel_anchor ~= self._caret then
+    -- Caret indices are between characters in [0..#text]. Selected characters are [a+1 .. b]
     local a, b = math.min(self._sel_anchor, self._caret), math.max(self._sel_anchor, self._caret)
     for i = 1, #lines do
-      local s = starts[i]
-      local e = s + #lines[i] - 1
-      local sel_s = math.max(a, s)
-      local sel_e = math.min(b, e)
+      local s = starts[i]              -- first character index on this line (1-based)
+      local e = s + #lines[i] - 1      -- last character index on this line (1-based)
+      -- Map caret selection to character indices within this line
+      local sel_s = math.max(a + 1, s) -- first selected character
+      local sel_e = math.min(b, e)     -- last selected character
       if sel_s <= sel_e then
         local x1 = gx + pad + measure(string.sub(lines[i], 1, sel_s - s))
         local x2 = gx + pad + measure(string.sub(lines[i], 1, sel_e - s + 1))
@@ -310,6 +380,7 @@ function Input:render()
     self._caret_t = 0
     -- ensure typing flag is reset on blur
     if not self.is_focused then constants.is_typing = false; constants.typing_capture = nil end
+    self._frame_tick = 0
   end
 end
 

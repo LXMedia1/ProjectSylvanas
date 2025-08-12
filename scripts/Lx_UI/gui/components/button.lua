@@ -13,6 +13,7 @@ function Button:new(owner_gui, text, x, y, w, h, on_click)
     o.h = tonumber(h or 24) or 24
     o.on_click = on_click
     o.enabled = true
+    o._pressed_in = false
     return o
 end
 
@@ -47,14 +48,17 @@ function Button:render()
     end
 
     if core.graphics.text_2d then
-        local tw = (core.graphics.get_text_width and core.graphics.get_text_width(self.text, constants.FONT_SIZE, 0)) or 0
+        local fs = (constants.Theme and constants.Theme.font and constants.Theme.font.button) or constants.FONT_SIZE
+        local tw = (core.graphics.get_text_width and core.graphics.get_text_width(self.text, fs, 0)) or 0
         local tx = gx + math.floor((gw - tw) / 2)
-        local ty = gy + math.floor((gh - constants.FONT_SIZE) / 2) - 1
-        core.graphics.text_2d(self.text, constants.vec2.new(tx, ty), constants.FONT_SIZE, constants.color.white(255), false)
+        local ty = gy + math.floor((gh - fs) / 2) - 1
+        core.graphics.text_2d(self.text, constants.vec2.new(tx, ty), fs, constants.color.white(245), false)
     end
 
-    if hovered and constants.mouse_state.left_clicked then
-        if self.on_click then self.on_click(self) end
+    if hovered and constants.mouse_state.left_clicked then self._pressed_in = true end
+    if self._pressed_in and not constants.mouse_state.left_down then
+        self._pressed_in = false
+        if hovered and self.on_click then self.on_click(self) end
     end
 end
 

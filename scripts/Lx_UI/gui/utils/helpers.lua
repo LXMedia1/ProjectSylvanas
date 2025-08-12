@@ -42,6 +42,7 @@ end
 
 local function is_input_blocked()
     if is_mouse_over_gui_area() then return true end
+    if constants.is_typing then return true end
     for _, gui in pairs(constants.registered_guis) do
         if gui.is_open then
             if gui._text_inputs then

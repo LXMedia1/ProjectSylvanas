@@ -8,6 +8,13 @@ local Listbox = require("gui/components/listbox")
 local Combobox = require("gui/components/combobox")
 local Slider = require("gui/components/slider")
 local Input = require("gui/components/input")
+local Keybind = require("gui/components/keybind")
+local Toggle = require("gui/components/toggle_switch")
+local RadioGroup = require("gui/components/radio_group")
+local ProgressBar = require("gui/components/progress_bar")
+local Separator = require("gui/components/separator")
+local ScrollArea = require("gui/components/scroll_area")
+local ColorPicker = require("gui/components/color_picker")
 
 local Menu = {}
 Menu.__index = Menu
@@ -43,6 +50,35 @@ function Menu:new(name, width, height, unique_key)
         constants.gui_states[name] = core.menu.checkbox(true, id)
     end
     -- Do not modify checkbox userdata; persistence is handled after menu render
+    
+    -- Cleanup transient UI states when this GUI closes
+    function gui:_cleanup_on_close()
+        -- Clear input focus/selection and typing flag
+        if self._text_inputs then
+            for _, ti in ipairs(self._text_inputs) do
+                ti.is_focused = false
+                ti._is_selecting = false
+                ti._sel_anchor = nil
+                ti._mouse_was_down = false
+            end
+        end
+        if self._sliders then
+            for _, s in ipairs(self._sliders) do
+                s.dragging = false
+            end
+        end
+        -- Clear listbox drag payloads for safety
+        constants.listbox_drag = nil
+        constants.listbox_drop_handled = false
+        -- Clear global typing state
+        constants.is_typing = false
+        constants.typing_capture = nil
+        -- Designer/editor optional flags on this GUI, if present
+        if self._ctx_open ~= nil then self._ctx_open = false end
+        if self._edit_props_popup ~= nil then self._edit_props_popup = false end
+        if self._inline_edit_active ~= nil then self._inline_edit_active = false end
+    end
+
     return gui
 end
 
@@ -116,6 +152,55 @@ function Menu:AddInput(x, y, w, h, opts, on_change)
     self._text_inputs = self._text_inputs or {}
     table.insert(self._text_inputs, ti)
     return ti
+end
+
+function Menu:AddKeybind(x, y, w, h, label, on_change)
+    local kb = Keybind:new(self, x, y, w, h, label, on_change)
+    self._keybinds = self._keybinds or {}
+    table.insert(self._keybinds, kb)
+    return kb
+end
+
+function Menu:AddToggle(x, y, w, h, checked, on_change)
+    local t = Toggle:new(self, x, y, w, h, checked, on_change)
+    self._toggles = self._toggles or {}
+    table.insert(self._toggles, t)
+    return t
+end
+
+function Menu:AddRadioGroup(x, y, items, selected_index, on_change)
+    local rg = RadioGroup:new(self, x, y, items, selected_index, on_change)
+    self._radio_groups = self._radio_groups or {}
+    table.insert(self._radio_groups, rg)
+    return rg
+end
+
+function Menu:AddProgressBar(x, y, w, h, value)
+    local pb = ProgressBar:new(self, x, y, w, h, value)
+    self._progress_bars = self._progress_bars or {}
+    table.insert(self._progress_bars, pb)
+    return pb
+end
+
+function Menu:AddSeparator(x, y, w)
+    local sp = Separator:new(self, x, y, w)
+    self._separators = self._separators or {}
+    table.insert(self._separators, sp)
+    return sp
+end
+
+function Menu:AddScrollArea(x, y, w, h)
+    local sa = ScrollArea:new(self, x, y, w, h)
+    self._scroll_areas = self._scroll_areas or {}
+    table.insert(self._scroll_areas, sa)
+    return sa
+end
+
+function Menu:AddColorPicker(x, y, w, h, color, on_change, opts)
+    local cp = ColorPicker:new(self, x, y, w, h, color, on_change, opts)
+    self._color_pickers = self._color_pickers or {}
+    table.insert(self._color_pickers, cp)
+    return cp
 end
 
 return {

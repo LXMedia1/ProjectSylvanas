@@ -13,6 +13,9 @@ local function is_ctrl_down()
         or core.input.is_key_pressed(VK_RCONTROL)
 end
 
+-- short-lived deadline to keep capturing keyboard after generic GUI clicks
+local _gui_key_capture_deadline_ms = 0
+
 local function render_window(gui)
     -- No external image loading; header art is drawn procedurally
     -- background
@@ -119,28 +122,50 @@ local function render_window(gui)
             if p and p.render then p:render() end
         end
     end
+    if gui._scroll_areas then
+        for i = 1, #gui._scroll_areas do
+            local sa = gui._scroll_areas[i]
+            if sa and sa.render_begin and sa:render_begin() then
+                if sa.render_content then sa:render_content(sa) end
+                sa:render_end()
+            end
+        end
+    end
     if gui._buttons then
         for i = 1, #gui._buttons do
             local b = gui._buttons[i]
             if b and b.render then b:render() end
+            if b then table.insert(constants.hot_zones, { x = gui.x + (b.x or 0), y = gui.y + (b.y or 0), w = b.w or 0, h = b.h or 0 }) end
         end
     end
     if gui._checkboxes then
         for i = 1, #gui._checkboxes do
             local c = gui._checkboxes[i]
             if c and c.render then c:render() end
+            if c then table.insert(constants.hot_zones, { x = gui.x + (c.x or 0), y = gui.y + (c.y or 0), w = c.size or 18, h = c.size or 18 }) end
+        end
+    end
+    if gui._toggles then
+        for i = 1, #gui._toggles do
+            local t = gui._toggles[i]
+            if t and t.render then t:render() end
         end
     end
     if gui._sliders then
         for i = 1, #gui._sliders do
             local s = gui._sliders[i]
             if s and s.render then s:render() end
+            if s then
+                if not s.vertical then table.insert(constants.hot_zones, { x = gui.x + (s.x or 0), y = gui.y + (s.y or 0), w = s.length or 0, h = s.thickness or 12 })
+                else table.insert(constants.hot_zones, { x = gui.x + (s.x or 0), y = gui.y + (s.y or 0), w = s.thickness or 12, h = s.length or 0 }) end
+            end
         end
     end
     if gui._text_inputs then
         for i = 1, #gui._text_inputs do
             local ti = gui._text_inputs[i]
             if ti and ti.render then ti:render() end
+            if ti then table.insert(constants.hot_zones, { x = gui.x + (ti.x or 0), y = gui.y + (ti.y or 0), w = ti.w or 0, h = ti.h or 0 }) end
         end
     end
     -- After drawing, render tiny aligned menu windows + inputs so focused text boxes capture keys
@@ -156,14 +181,45 @@ local function render_window(gui)
         for i = 1, #gui._listboxes do
             local lb = gui._listboxes[i]
             if lb and lb.render then lb:render() end
+            if lb then table.insert(constants.hot_zones, { x = gui.x + (lb.x or 0), y = gui.y + (lb.y or 0), w = lb.w or 0, h = lb.h or 0 }) end
         end
     end
     if gui._comboboxes then
         for i = 1, #gui._comboboxes do
             local cb = gui._comboboxes[i]
             if cb and cb.render then cb:render() end
+            if cb then table.insert(constants.hot_zones, { x = gui.x + (cb.x or 0), y = gui.y + (cb.y or 0), w = cb.w or 0, h = cb.h or 0 }) end
         end
     end
+    if gui._radio_groups then
+        for i = 1, #gui._radio_groups do
+            local rg = gui._radio_groups[i]
+            if rg and rg.render then rg:render() end
+            if rg then table.insert(constants.hot_zones, { x = gui.x + (rg.x or 0), y = gui.y + (rg.y or 0), w = 180, h = ((constants.FONT_SIZE or 14) + 6) * (#(rg.items or {}) ) }) end
+        end
+    end
+    if gui._progress_bars then
+        for i = 1, #gui._progress_bars do
+            local pb = gui._progress_bars[i]
+            if pb and pb.render then pb:render() end
+            if pb then table.insert(constants.hot_zones, { x = gui.x + (pb.x or 0), y = gui.y + (pb.y or 0), w = pb.w or 0, h = pb.h or 0 }) end
+        end
+    end
+    if gui._color_pickers then
+        for i = 1, #gui._color_pickers do
+            local cp = gui._color_pickers[i]
+            if cp and cp.render then cp:render() end
+            if cp then table.insert(constants.hot_zones, { x = gui.x + (cp.x or 0), y = gui.y + (cp.y or 0), w = cp.w or 0, h = cp.h or 0 }) end
+        end
+    end
+    if gui._separators then
+        for i = 1, #gui._separators do
+            local sp = gui._separators[i]
+            if sp and sp.render then sp:render() end
+            if sp then table.insert(constants.hot_zones, { x = gui.x + (sp.x or 0), y = gui.y + (sp.y or 0), w = sp.w or 0, h = 2 }) end
+        end
+    end
+    -- scroll areas already ended above after content
     -- After all listboxes for this gui rendered, if a drop was handled this frame and mouse is up, clear drag payload
     if constants.listbox_drag and not constants.mouse_state.left_down then
         if constants.listbox_drop_handled then
@@ -505,59 +561,16 @@ end
 
 local function render_all()
     input.update_mouse()
+    -- Input capture removed from early render; handled in on_update
     -- reset drag flags at frame start (will be set by listboxes on drop)
     constants.listbox_drop_handled = false
 
     -- Early pass for input blockers removed (blocker removed from inputs)
 
-    -- Render an invisible blocking window under EACH open & enabled GUI to prevent click-through
-    if core.menu and core.menu.window then
-        for name, gui in pairs(constants.registered_guis) do
-            local enabled_checkbox = constants.gui_states[name]
-            local enabled = true
-            if enabled_checkbox then
-                if enabled_checkbox.get_state then
-                    enabled = enabled_checkbox:get_state()
-                elseif enabled_checkbox.get then
-                    enabled = enabled_checkbox:get()
-                end
-            end
-            -- Always allow blocker for non-launcher windows like settings (even if no checkbox)
-            if gui.is_hidden_from_launcher then enabled = gui.is_open or enabled end
-            if gui.is_open and enabled then
-                local bw = gui.blocking_window
-                if bw and bw.stop_forcing_size then
-                    bw:stop_forcing_size()
-                    bw:force_next_begin_window_pos(constants.vec2.new(gui.x, gui.y))
-                    bw:set_next_window_min_size(constants.vec2.new(gui.width, gui.height))
-                    bw:force_window_size(constants.vec2.new(gui.width, gui.height))
-                end
-                if bw and bw.set_background_multicolored then
-                    local c = constants.color.new(0,0,0,0)
-                    bw:set_background_multicolored(c,c,c,c)
-                end
-                if bw and bw.begin then
-                    bw:begin(
-                        0,
-                        false,
-                        constants.color.new(0,0,0,0),
-                        constants.color.new(0,0,0,0),
-                        0,
-                        (core.enums and core.enums.window_enums and core.enums.window_enums.window_behaviour_flags and core.enums.window_enums.window_behaviour_flags.NO_MOVE) or 0,
-                        0,
-                        0,
-                        function()
-                            if bw.add_artificial_item_bounds then
-                                bw:add_artificial_item_bounds(constants.vec2.new(0,0), constants.vec2.new(gui.width, gui.height))
-                            end
-                        end
-                    )
-                end
-                -- No input blockers to render
-            end
-        end
-    end
+    -- Blocking windows removed; we rely on high-frequency input capture instead
 
+    -- reset per-frame hot zones then render
+    constants.hot_zones = {}
     for name, gui in pairs(constants.registered_guis) do
         local enabled_checkbox = constants.gui_states[name]
         local enabled = true
@@ -571,6 +584,11 @@ local function render_all()
         -- Always render settings and other internal windows when open (no launcher checkbox)
         if gui.is_open and enabled then
             render_window(gui)
+        else
+            -- If a GUI just got closed this frame, ensure transient states are cleared
+            if not gui.is_open and gui._cleanup_on_close then
+                gui:_cleanup_on_close()
+            end
         end
     end
     -- Draw all launcher UIs that have items; default items appear only in the active launcher
@@ -642,6 +660,22 @@ local function render_all()
         constants.listbox_drag = nil
         constants.listbox_drop_handled = false
     end
+
+    -- If mouse is over any hot zone, capture mouse to block game actions
+    if core.graphics and constants.hot_zones then
+        local m = constants.mouse_state.position
+        local inside_any = false
+        for i = 1, #constants.hot_zones do
+            local r = constants.hot_zones[i]
+            if helpers.is_point_in_rect(m.x, m.y, r.x, r.y, r.w, r.h) then inside_any = true; break end
+        end
+        -- Only capture here on click edge to avoid sticky blocking
+        if inside_any and (constants.mouse_state.left_clicked or constants.mouse_state.right_clicked) then
+            if core.graphics.capture_next_mouse_input then core.graphics.capture_next_mouse_input() end
+        end
+    end
+
+    -- Input capture handled in on_update
 end
 
 local function render_menu_controls()

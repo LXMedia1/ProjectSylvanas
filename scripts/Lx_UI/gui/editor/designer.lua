@@ -13,6 +13,12 @@ local palette_defs = {
   { id = "slider",   name = "Slider",   w = 180, h = 12,  cat = "Inputs" },
   { id = "listbox",  name = "Listbox",  w = 180, h = 160, cat = "Inputs" },
   { id = "input",    name = "Input",    w = 200, h = 22,  cat = "Inputs" },
+    { id = "keybind",  name = "Keybind",  w = 200, h = 22,  cat = "Inputs" },
+    { id = "toggle",   name = "Toggle",   w = 46,  h = 22,  cat = "Inputs" },
+    { id = "radio",    name = "RadioGroup", w = 160, h = 48, cat = "Inputs" },
+    { id = "progress", name = "ProgressBar", w = 200, h = 14, cat = "Basic" },
+    { id = "separator",name = "Separator", w = 200, h = 1,  cat = "Basic" },
+    { id = "scroll",   name = "ScrollArea", w = 220, h = 160, cat = "Containers" },
   { id = "panel",    name = "Panel",    w = 220, h = 160, cat = "Containers" },
 }
 
@@ -118,6 +124,25 @@ local function draw_component(comp, x, y)
     core.graphics.rect_2d(constants.vec2.new(x, y), w, h, constants.color.new(32, 40, 70, 255), 1, 6)
     core.graphics.rect_2d_filled(constants.vec2.new(x, y), w, 20, constants.color.new(56, 80, 140, 230), 6)
     core.graphics.text_2d(comp.title or "Panel", constants.vec2.new(x + 8, y + 2), constants.FONT_SIZE, constants.color.white(255), false)
+  elseif k == "keybind" then
+    core.graphics.rect_2d_filled(constants.vec2.new(x, y), w, 22, constants.color.new(20, 26, 42, 245), 4)
+    core.graphics.rect_2d(constants.vec2.new(x, y), w, 22, constants.color.new(32, 40, 70, 255), 1, 4)
+    core.graphics.text_2d("Keybind", constants.vec2.new(x + 8, y - 1), constants.FONT_SIZE, constants.color.white(255), false)
+  elseif k == "toggle" then
+    core.graphics.rect_2d_filled(constants.vec2.new(x, y), 46, 22, constants.color.new(60,70,95,210), 11)
+    core.graphics.rect_2d_filled(constants.vec2.new(x + 1, y + 1), 20, 20, constants.color.white(230), 9)
+  elseif k == "radio" then
+    core.graphics.rect_2d(constants.vec2.new(x, y), w, h, constants.color.new(32, 40, 70, 255), 1, 6)
+    core.graphics.text_2d("RadioGroup", constants.vec2.new(x + 6, y + 2), constants.FONT_SIZE, constants.color.white(255), false)
+  elseif k == "progress" then
+    core.graphics.rect_2d_filled(constants.vec2.new(x, y), w, 14, constants.color.new(16,20,34,235), 4)
+    core.graphics.rect_2d(constants.vec2.new(x, y), w, 14, constants.color.new(32, 40, 70, 255), 1, 4)
+    core.graphics.rect_2d_filled(constants.vec2.new(x, y), math.floor(w*0.5), 14, constants.color.new(120,160,230,255), 4)
+  elseif k == "separator" then
+    core.graphics.rect_2d(constants.vec2.new(x, y), w, 1, constants.color.new(32,40,70,200), 1, 0)
+  elseif k == "scroll" then
+    core.graphics.rect_2d_filled(constants.vec2.new(x, y), w, h, constants.color.new(14, 18, 30, 220), 6)
+    core.graphics.rect_2d(constants.vec2.new(x, y), w, h, constants.color.new(32, 40, 70, 255), 1, 6)
   end
   -- selection handle
   if comp.__selected then

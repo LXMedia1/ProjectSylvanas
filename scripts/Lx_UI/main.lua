@@ -305,6 +305,58 @@ local function on_update()
             _G.__lxui_prev_f3 = false
         end
     end
+
+    -- Input capture during update (short-timed capture API ~100ms)
+    -- Over-GUI check
+    local over_gui = (helpers.is_mouse_over_gui_area and helpers.is_mouse_over_gui_area()) or false
+    local now_ms = (core.time and core.time()) or 0
+    local clicking_down = constants.mouse_state.left_down or constants.mouse_state.right_down
+    local clicking_edge = constants.mouse_state.left_clicked or constants.mouse_state.right_clicked
+
+    -- Toggle mouse drag-capture lifetime
+    -- Start capture only if the press began over GUI (inside-first rule)
+    if (constants.mouse_state.left_clicked or constants.mouse_state.right_clicked) then
+        constants.__press_started_over_gui = over_gui
+        constants.mouse_capture_active = over_gui
+    end
+    -- Continue capture only while button is held AND the press started over GUI
+    if not (constants.mouse_state.left_down or constants.mouse_state.right_down) then
+        constants.mouse_capture_active = false
+        constants.__press_started_over_gui = false
+    else
+        if not constants.__press_started_over_gui then
+            -- Press started outside, do not capture even if cursor enters GUI later
+            constants.mouse_capture_active = false
+        end
+    end
+
+    -- Decide if we want mouse/keyboard capture windows active
+    local want_mouse_capture = false
+    -- Hover blocking only when no button is currently held (so first click is blocked)
+    if over_gui and (not clicking_down) then
+        want_mouse_capture = true
+    end
+    -- While dragging that started over GUI, keep capture active (even if cursor left)
+    if constants.mouse_capture_active and clicking_down then
+        want_mouse_capture = true
+    end
+
+    local want_keyboard_capture = false
+
+    -- Throttled capture calls to maintain coverage without over-blocking
+    constants.__next_mouse_capture_ms = constants.__next_mouse_capture_ms or 0
+    constants.__next_key_capture_ms = constants.__next_key_capture_ms or 0
+
+    if core.graphics then
+        -- Mouse: refresh capture roughly every 60ms while needed (API blocks ~100ms)
+        constants.__next_mouse_capture_ms = constants.__next_mouse_capture_ms or 0
+        if want_mouse_capture and core.graphics.capture_next_mouse_input and now_ms >= constants.__next_mouse_capture_ms then
+            core.graphics.capture_next_mouse_input()
+            constants.__last_mouse_capture_ms = now_ms
+            constants.__next_mouse_capture_ms = now_ms + 60
+        end
+        -- No keyboard capture from update; handled elsewhere if needed
+    end
 end
 
 -- Render loop
@@ -322,6 +374,31 @@ local function on_render()
         end
     end
     rendering.render_all()
+
+    -- Remove key-driven capture: rely purely on draw-based conditions below
+
+    -- Draw-phase blocking aligned with indicator: request capture every render
+    -- but only if either hover-without-press or a drag that started inside is active.
+    do
+        local over_now = (helpers.is_mouse_over_gui_area and helpers.is_mouse_over_gui_area()) or false
+        local mouse_down_now = constants.mouse_state.left_down or constants.mouse_state.right_down
+        local should_block = (over_now and (not mouse_down_now)) or (constants.mouse_capture_active and mouse_down_now)
+
+        if core.graphics then
+            if should_block and core.graphics.capture_next_mouse_input then
+                core.graphics.capture_next_mouse_input()
+                constants.__last_mouse_capture_ms = (core.time and core.time()) or 0
+            end
+            -- Keyboard capture only when an input/keybind is actively consuming keyboard
+            local want_keyboard = (helpers.is_input_blocked and helpers.is_input_blocked()) or false
+            if (constants.mouse_capture_active or over_now) and want_keyboard and core.graphics.capture_next_keyboard_input then
+                core.graphics.capture_next_keyboard_input()
+                constants.__last_key_capture_ms = (core.time and core.time()) or 0
+            end
+        end
+    end
+
+    -- Debug label removed per request
 end
 
 -- Menu rendering
@@ -409,6 +486,7 @@ _G.Lx_UI = Lx_UI
 -- Register callbacks
 core.register_on_update_callback(on_update)
 core.register_on_render_callback(on_render)
+
 core.register_on_render_menu_callback(on_render_menu)
 
 core.log("Lx_UI loaded: modular UI system initialized")

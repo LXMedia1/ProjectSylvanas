@@ -81,8 +81,10 @@ function Checkbox:render()
 
     if self.label ~= "" and core.graphics.text_2d then
         local tx = gx + s + 8
-        local ty = gy + math.floor((s - constants.FONT_SIZE) / 2) - 1
-        core.graphics.text_2d(self.label, constants.vec2.new(tx, ty), constants.FONT_SIZE, constants.color.white(255), false)
+        local base = (constants.Theme and constants.Theme.font and constants.Theme.font.checkbox) or math.max(12, (constants.FONT_SIZE or 14) - 1)
+        local fs = math.max(13, base)
+        local ty = gy + math.floor((s - fs) / 2)
+        core.graphics.text_2d(self.label, constants.vec2.new(tx, ty), fs, constants.color.white(255), false)
     end
 
     if hovered and constants.mouse_state.left_clicked then

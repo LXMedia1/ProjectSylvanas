@@ -6,6 +6,7 @@ local Persist = {}
 local BASE_DIR = "Lx_UI"
 local WINDOWS_DIR = BASE_DIR .. "/windows"
 local PLUGIN_FILE = BASE_DIR .. "/lx_ui.cfg"
+local COLORS_FILE = BASE_DIR .. "/colors.cfg"
 
 local function ensure_dirs()
     if core and core.create_data_folder then
@@ -84,6 +85,44 @@ function Persist.load_plugin()
     end
     constants.__default_launcher = t.default_launcher
     return t
+end
+
+-- ================= Colors persistence (global, plugin-wide) =================
+-- We store a semicolon-separated list of RGBA quads: "r,g,b,a;r,g,b,a;..."
+local function serialize_colors(list)
+    local parts = {}
+    for i = 1, #(list or {}) do
+        local c = list[i]
+        if c and c.r and c.g and c.b then
+            local a = (c.a ~= nil) and c.a or 255
+            table.insert(parts, tostring(math.floor(c.r)) .. "," .. tostring(math.floor(c.g)) .. "," .. tostring(math.floor(c.b)) .. "," .. tostring(math.floor(a)))
+        end
+    end
+    return table.concat(parts, ";")
+end
+
+local function parse_colors(s)
+    local out = {}
+    if not s or #s == 0 then return out end
+    for quad in string.gmatch(s, "[^;]+") do
+        local r, g, b, a = string.match(quad, "^%s*(%d+)%s*,%s*(%d+)%s*,%s*(%d+)%s*,%s*(%d+)%s*$")
+        r = tonumber(r); g = tonumber(g); b = tonumber(b); a = tonumber(a or 255)
+        if r and g and b then table.insert(out, { r = r, g = g, b = b, a = (a or 255) }) end
+    end
+    return out
+end
+
+function Persist.load_colors()
+    ensure_dirs()
+    local raw = core.read_data_file(COLORS_FILE) or ""
+    return parse_colors(raw)
+end
+
+function Persist.save_colors(list)
+    ensure_dirs()
+    core.create_data_file(COLORS_FILE)
+    local buf = serialize_colors(list or {})
+    core.write_data_file(COLORS_FILE, buf)
 end
 
 function Persist.save_plugin(cfg)

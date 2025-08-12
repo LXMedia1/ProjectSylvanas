@@ -135,21 +135,35 @@ function Listbox:render()
             core.graphics.rect_2d(constants.vec2.new(gx, gy), gw, gh, col_drop_border, 2, 6)
         end
     end
-    local rows_fit = math.max(0, math.floor((gh - self.header_h - 4) / self.row_height))
+    -- Clip content region to the inner area so rows never render outside
+    -- Slight insets to avoid bleeding over top/bottom edges
+    local clip_x = gx + 3
+    local clip_y = gy + self.header_h + 3
+    local clip_w = gw - 6
+    local clip_h = gh - self.header_h - 8
+    local scissor_enabled = false
+    if core.graphics and core.graphics.set_scissor and clip_w > 0 and clip_h > 0 then
+        core.graphics.set_scissor(true, clip_x, clip_y, clip_w, clip_h)
+        scissor_enabled = true
+    end
+    local rows_fit = math.max(0, math.floor(clip_h / self.row_height))
     local count = math.min(rows_fit, #self.items)
-    local y = gy + self.header_h + 2
+    local y = clip_y
     for i = 1, count do
         local item = tostring(self.items[i])
-        local hovered = (mouse.x >= gx and mouse.x <= gx + gw and mouse.y >= y and mouse.y <= y + self.row_height)
+        local hovered = (mouse.x >= clip_x and mouse.x <= clip_x + clip_w and mouse.y >= y and mouse.y <= y + self.row_height)
         local is_sel = (self.selected_index == i)
         local fill = is_sel and col_row_selected or (hovered and col_row_hover or col_row)
-        if core.graphics.rect_2d_filled then
-            core.graphics.rect_2d_filled(constants.vec2.new(gx + 2, y), gw - 4, self.row_height - 2, fill, 4)
-        end
-        if core.graphics.text_2d then
-            local tx = gx + 8
-            local ty = y + math.floor((self.row_height - (constants.FONT_SIZE or 14)) / 2) - 1
-            core.graphics.text_2d(item, constants.vec2.new(tx, ty), constants.FONT_SIZE, col_text, false)
+        -- Draw row only if inside the clipping bounds (fallback when scissor unsupported)
+        if y + (self.row_height - 2) > clip_y and y < clip_y + clip_h - 1 then
+            if core.graphics.rect_2d_filled then
+                core.graphics.rect_2d_filled(constants.vec2.new(gx + 3, y), gw - 6, self.row_height - 2, fill, 4)
+            end
+            if core.graphics.text_2d then
+                local tx = gx + 9
+                local ty = y + math.floor((self.row_height - (constants.FONT_SIZE or 14)) / 2) - 1
+                core.graphics.text_2d(item, constants.vec2.new(tx, ty), constants.FONT_SIZE, col_text, false)
+            end
         end
         if hovered then
             if constants.mouse_state.left_down and constants.listbox_drag == nil then
@@ -162,6 +176,10 @@ function Listbox:render()
         y = y + self.row_height
     end
 
+    -- Disable scissor after drawing rows
+    if scissor_enabled and core.graphics and core.graphics.set_scissor then
+        core.graphics.set_scissor(false, 0, 0, 0, 0)
+    end
     -- Ghost is drawn at the end of the GUI render so it appears on top; nothing to draw here
 
     -- Drop handling: if a drag exists and mouse released over this listbox, move item
@@ -173,7 +191,7 @@ function Listbox:render()
             local same_type = (payload.type_id ~= nil and self.type_id ~= nil and payload.type_id == self.type_id)
             if self.accepts_drop and same_type then
                 -- Update central assignment map if present, using the target drop slot
-                if self.drop_slot and constants.launcher_assignments then
+                if self.drop_slot and constants.launcher_assignments and payload and payload.text then
                     constants.launcher_assignments[payload.text] = self.drop_slot
                 end
                 -- Remove from source items array if present
@@ -186,20 +204,20 @@ function Listbox:render()
                     end
                 end
                 -- Deduplicate in target then insert
-                if self.items then
+                if self.items and payload and payload.text then
                     for ti = #self.items, 1, -1 do
-                        if tostring(self.items[ti]) == tostring(payload and payload.text or "") then
+                        if tostring(self.items[ti]) == tostring(payload.text) then
                             table.remove(self.items, ti)
                         end
                     end
-                    table.insert(self.items, tostring(payload and payload.text or ""))
+                    table.insert(self.items, tostring(payload.text))
                 end
                 -- Notify listeners
                 if self.on_change and payload then self.on_change(self, nil, payload.text) end
                 -- Persist assignment change immediately via window save utility if available
                 if _G and _G.Lx_UI and _G.Lx_UI._persist_assignments then _G.Lx_UI._persist_assignments() end
                 constants.listbox_drop_handled = true
-                if core and core.log then core.log("[Lx_UI] Listbox dropped '" .. tostring(payload.text) .. "' into '" .. (self.title or "") .. "'") end
+                if core and core.log and payload and payload.text then core.log("[Lx_UI] Listbox dropped '" .. tostring(payload.text) .. "' into '" .. (self.title or "") .. "'") end
             end
         end
         -- Do not clear here; a centralized cleanup will run after all listboxes rendered

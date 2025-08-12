@@ -64,7 +64,7 @@ function Tabs:render()
     local col_divider = constants.color.new(14, 18, 26, 220)
     local col_tab_inactive = constants.color.new(44, 64, 110, 190)
     local col_tab_hover = constants.color.new(68, 98, 160, 220)
-    local col_tab_active = constants.color.new(205, 215, 235, 245)
+    local col_tab_active = constants.color.new(205, 215, 235, 240)
     local col_text = constants.color.white(255)
     local col_text_inactive = constants.color.new(230, 235, 245, 235)
     local col_text_active = constants.color.new(30, 40, 60, 255)
@@ -131,8 +131,9 @@ function Tabs:render()
             draw_tab(g, fill)
             if core.graphics.text_2d then
                 local text_x = g.x + shoulder + pad_x
-                local text_y = g.y + math.floor((g.h - constants.FONT_SIZE) / 2) - 1
-                core.graphics.text_2d(g.label, constants.vec2.new(text_x, text_y), constants.FONT_SIZE, col_text_inactive, false)
+            local fs = (constants.Theme and constants.Theme.font and constants.Theme.font.tab) or constants.FONT_SIZE
+            local text_y = g.y + math.floor((g.h - fs) / 2) - 1
+            core.graphics.text_2d(g.label, constants.vec2.new(text_x, text_y), fs, col_text_inactive, false)
             end
             if hovered and constants.mouse_state.left_clicked then clicked_index = i end
             self.items[i]._rect = { x = g.x, y = g.y, w = g.w, h = g.h }
@@ -146,8 +147,9 @@ function Tabs:render()
         -- top inner highlight for active (disabled to avoid tone differences)
         if core.graphics.text_2d then
             local text_x = g.x + shoulder + pad_x
-            local text_y = g.y + math.floor((g.h - constants.FONT_SIZE) / 2) - 1
-            core.graphics.text_2d(g.label, constants.vec2.new(text_x, text_y), constants.FONT_SIZE, col_text_active, false)
+            local fs = (constants.Theme and constants.Theme.font and constants.Theme.font.tab) or constants.FONT_SIZE
+            local text_y = g.y + math.floor((g.h - fs) / 2) - 1
+            core.graphics.text_2d(g.label, constants.vec2.new(text_x, text_y), fs, col_text_active, false)
         end
         if (mouse.x >= g.x and mouse.x <= g.x + g.w and mouse.y >= g.y and mouse.y <= g.y + g.h) and constants.mouse_state.left_clicked then
             clicked_index = active_index

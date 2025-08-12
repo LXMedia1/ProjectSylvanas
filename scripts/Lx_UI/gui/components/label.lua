@@ -11,7 +11,8 @@ function Label:new(owner_gui, text, x, y, col, font_size)
     o.x = tonumber(x or 0) or 0
     o.y = tonumber(y or 0) or 0
     o.color = col or constants.color.white(255)
-    o.size = font_size or constants.FONT_SIZE
+    local theme_size = (constants.Theme and constants.Theme.font and constants.Theme.font.label) or constants.FONT_SIZE
+    o.size = font_size or theme_size
     o.visible_if = nil
     return o
 end
