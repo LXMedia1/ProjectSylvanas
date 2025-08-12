@@ -56,6 +56,10 @@ local path2 = nav.get_path(vec3.new(sx, sy, sz), vec3.new(ex, ey, ez))
 nav.stop()
 ```
 
+### Performance notes
+- Tiles are loaded around the player within `tile_load_radius` (default: 1) and tiles farther than `tile_keep_radius` (default: 2) are automatically unloaded over time to prevent memory bloat.
+- Path overlay now draws even when general visualization is disabled; toggle it with `set_show_path(true)`.
+
 ### How it works (brief)
 - Loads mmaps tiles around the player and merges polygons across tiles.
 - Builds a graph and computes an A* path; path is followed with human‑like steering.

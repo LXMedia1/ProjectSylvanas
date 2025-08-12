@@ -665,6 +665,8 @@ function TileManager:new()
         simplify_tolerance = 1.8,
         -- Tile loading
         tile_load_radius = 1,
+        -- Keep tiles within this Chebyshev radius; tiles farther than this are evicted
+        tile_keep_radius = 2,
         -- Async graph build budget (ms per frame)
         job_time_budget_ms = 0.5,
         tile_load_budget_ms = 2.0,
@@ -787,12 +789,14 @@ function TileManager:start()
         self:step_graph_job_with_budget()
     end)
 
-    -- Register render callback to draw the navmesh
+    -- Register render callback
     core.register_on_render_callback(function()
-        if not self.allow_visualization then return end
+        -- Always allow path overlay when requested, independent of debug visualization
         if self.show_path then
             self:draw_path()
         end
+        -- Gated debug/mesh visualization
+        if not self.allow_visualization then return end
         if self.debug_enabled then
             self:draw_navmesh()
             if self.draw_path_polygons_enabled then
@@ -820,6 +824,8 @@ function TileManager:update(pos)
 
     -- Always make sure a small neighborhood is loaded and graph is merged
     local changed = self:ensure_neighbor_tiles_loaded(tile_x, tile_y, self.tile_load_radius or 1)
+    -- Evict far-away tiles to avoid memory bloat over time
+    self:evict_far_tiles(tile_x, tile_y, self.tile_keep_radius or 2)
     if changed or self.tiles_dirty then
         self:schedule_incremental_graph_build()
         self.tiles_dirty = false
@@ -1000,6 +1006,46 @@ function TileManager:ensure_neighbor_tiles_loaded(cx, cy, radius)
         core.log(string.format("[Perf] ensure_neighbor_tiles_loaded center=%s total=%.2fms", ckey, total_ms))
     end
     return any_loaded
+end
+
+-- Unload tiles that are outside a keep radius (Chebyshev distance) from center tile
+function TileManager:evict_far_tiles(cx, cy, keep_radius)
+    local r = math.max(0, math.floor(keep_radius or 2))
+    if r < 0 then r = 0 end
+    if not self.loaded_tiles then return end
+    local removed_any = false
+    -- Collect keys first to avoid mutating during iteration semantics
+    local to_remove = {}
+    for key, _ in pairs(self.loaded_tiles) do
+        local sep = string.find(key, ":", 1, true)
+        if sep then
+            local tx = tonumber(string.sub(key, 1, sep - 1)) or 0
+            local ty = tonumber(string.sub(key, sep + 1)) or 0
+            local dx = math.abs(tx - cx)
+            local dy = math.abs(ty - cy)
+            if dx > r or dy > r then
+                table.insert(to_remove, key)
+            end
+        end
+    end
+    -- Debug log summary before removal
+    if self.debuglog_enabled and #to_remove > 0 then
+        local preview = {}
+        local max_list = math.min(5, #to_remove)
+        for i = 1, max_list do preview[i] = to_remove[i] end
+        dlog(self, string.format("[Nav] Evicting %d tile(s) beyond r=%d from center %d:%d (e.g. %s)", #to_remove, r, cx, cy, table.concat(preview, ",")))
+    end
+    for i = 1, #to_remove do
+        local k = to_remove[i]
+        self.loaded_tiles[k] = nil
+        if self.tiles and self.tiles[k] then
+            self.tiles[k] = nil
+        end
+        removed_any = true
+    end
+    if removed_any then
+        self.tiles_dirty = true
+    end
 end
 
 -- Rebuild merged polygon graph across all loaded tiles
@@ -1772,6 +1818,9 @@ function TileManager:update_movement()
             if self.turn_right_active then core.input.turn_right_stop(); self.turn_right_active = false end
             self.move_active = false
             dlog(self, "Path complete; movement finished")
+            -- Auto-hide path when destination is reached
+            self.path_nodes = nil
+            self.path_poly_ids = nil
             if self.move_finish_cb then
                 local cb = self.move_finish_cb
                 self.move_finish_cb = nil
