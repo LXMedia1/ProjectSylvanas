@@ -188,6 +188,14 @@ function Tabs:render()
 
     if clicked_index then
         self.active_id = self.items[clicked_index].id
+        -- Persist settings tab when this Tabs belongs to the Settings GUI
+        if self.gui and self.gui.is_settings and _G and _G.Lx_UI then
+            local persist = require("gui/utils/persist")
+            persist.save_plugin({
+                settings_tab = self.active_id,
+                settings_visible = not not self.gui.is_open
+            })
+        end
     end
 end
 

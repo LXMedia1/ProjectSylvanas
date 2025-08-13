@@ -127,21 +127,24 @@ end
 
 function Persist.save_plugin(cfg)
     ensure_dirs()
-    -- avoid redundant writes
-    local need = true
-    if last_plugin_snapshot then
-        need = false
-        for k, v in pairs(cfg) do
-            if last_plugin_snapshot[k] ~= v then need = true break end
-        end
-        for k, v in pairs(last_plugin_snapshot) do
-            if cfg[k] ~= v then need = true break end
-        end
-    end
-    if not need then return end
+    -- do not skip: always write the merged snapshot so we don't lose flags
     core.create_data_file(PLUGIN_FILE)
-    local snap = {}
-    for k, v in pairs(cfg) do snap[k] = v end
+    -- merge with last snapshot and on-disk current
+    local existing = {}
+    if last_plugin_snapshot then
+        for k, v in pairs(last_plugin_snapshot) do existing[k] = v end
+    else
+        local raw = core.read_data_file(PLUGIN_FILE) or ""
+        existing = parse(raw)
+    end
+    for k, v in pairs(cfg) do existing[k] = v end
+    -- Ensure core layout fields are always persisted so positions remain stable across reloads
+    if existing.sidebar_top_offset == nil then existing.sidebar_top_offset = (constants.SIDEBAR_TOP_OFFSET or 80) end
+    if existing.palette_top_offset == nil then existing.palette_top_offset = (constants.PALETTE_TOP_OFFSET or 120) end
+    if existing.palette_left_offset == nil then existing.palette_left_offset = (constants.PALETTE_LEFT_OFFSET or 0) end
+    if existing.launcher_mode == nil then existing.launcher_mode = (constants.launcher_mode or 1) end
+    if existing.default_launcher == nil then existing.default_launcher = (constants.__default_launcher or "sidebar") end
+    local snap = existing
     if not snap.default_launcher then
         snap.default_launcher = constants.__default_launcher or "sidebar"
     else
@@ -170,11 +173,23 @@ function Persist.save_window(gui, extra)
     if chk then
         if chk.get_state then enabled = not not chk:get_state() elseif chk.get then enabled = not not chk:get() end
     end
+    -- Persist original geometry when maximized so we keep exactly two states:
+    -- maximized and original (do not overwrite original with maximized size)
+    local px = gui.x
+    local py = gui.y
+    local pw = gui.width
+    local ph = gui.height
+    if gui._maximized and gui._premax and gui._premax.w and gui._premax.h then
+        px = gui._premax.x or px
+        py = gui._premax.y or py
+        pw = gui._premax.w
+        ph = gui._premax.h
+    end
     local cfg = {
-        x = gui.x,
-        y = gui.y,
-        width = gui.width,
-        height = gui.height,
+        x = px,
+        y = py,
+        width = pw,
+        height = ph,
         is_open = not not gui.is_open,
         slot = (constants.launcher_assignments and constants.launcher_assignments[gui.name]) or "default",
         enabled = enabled

@@ -13,6 +13,7 @@ function Input:new(owner_gui, x, y, w, h, opts, on_change)
   o.h = tonumber(h or 22) or 22
   o.text = tostring((opts and opts.text) or "")
   o.multiline = not not (opts and opts.multiline)
+  o.transparent = not not (opts and opts.transparent)
   o.on_change = on_change
   o.visible_if = nil
   o.is_focused = false
@@ -167,14 +168,16 @@ function Input:render()
   local gy = self.gui.y + self.y
   local w, h = self.w, self.h
 
-  -- background and border
+  -- background and border (support transparent mode for inline edits)
   local col_bg = constants.color.new(20, 26, 42, 245)
   local col_bd = constants.color.new(32, 40, 70, 255)
-  if core.graphics.rect_2d_filled then
-    core.graphics.rect_2d_filled(constants.vec2.new(gx, gy), w, h, col_bg, 4)
-  end
-  if core.graphics.rect_2d then
-    core.graphics.rect_2d(constants.vec2.new(gx, gy), w, h, col_bd, 1, 4)
+  if not self.transparent then
+    if core.graphics.rect_2d_filled then
+      core.graphics.rect_2d_filled(constants.vec2.new(gx, gy), w, h, col_bg, 4)
+    end
+    if core.graphics.rect_2d then
+      core.graphics.rect_2d(constants.vec2.new(gx, gy), w, h, col_bd, 1, 4)
+    end
   end
 
   -- focus handling
@@ -212,11 +215,24 @@ function Input:render()
     local released = (self._mouse_was_down and not constants.mouse_state.left_down)
     self._mouse_was_down = constants.mouse_state.left_down
     if pressed and over then
-      local x_rel = (constants.mouse_state.position.x - gx)
-      local y_rel = (constants.mouse_state.position.y - gy)
-      self._caret = clamp(index_from_mouse(self.text or "", x_rel, y_rel), 0, #(self.text or ""))
-      self._sel_anchor = self._caret
-      self._is_selecting = true
+      -- Double-click: select all text
+      local now_ms = (core.time and core.time()) or 0
+      local mx, my = constants.mouse_state.position.x, constants.mouse_state.position.y
+      local dt = now_ms - (self._last_click_t or 0)
+      local moved = (math.abs(mx - (self._last_click_x or mx)) > 3) or (math.abs(my - (self._last_click_y or my)) > 3)
+      if dt <= 350 and not moved then
+        if self.select_all then self:select_all() end
+        self._is_selecting = false
+      else
+        local x_rel = (mx - gx)
+        local y_rel = (my - gy)
+        self._caret = clamp(index_from_mouse(self.text or "", x_rel, y_rel), 0, #(self.text or ""))
+        self._sel_anchor = self._caret
+        self._is_selecting = true
+      end
+      self._last_click_t = now_ms
+      self._last_click_x = mx
+      self._last_click_y = my
     elseif self._is_selecting and constants.mouse_state.left_down then
       local x_rel = (constants.mouse_state.position.x - gx)
       local y_rel = (constants.mouse_state.position.y - gy)
@@ -298,6 +314,15 @@ function Input:render()
       self._bs_next_repeat = now_clock + delay_repeat
     end
     self._bs_prev_down = bs_now
+    -- Escape: cancel/blur the input (Designer will close inline edit on blur)
+    local VK_ESCAPE = 0x1B
+    if key_edge(self, VK_ESCAPE) then
+      self.is_focused = false
+      constants.is_typing = false
+      constants.typing_capture = nil
+      self._sel_anchor = nil
+      self._is_selecting = false
+    end
     -- basic character input: alnum + OEM punctuation ranges
     local function insert_char(ch)
       if not ch or ch == "" then return end
@@ -315,31 +340,62 @@ function Input:render()
       end
       if self.on_change then self.on_change(self, self.text) end
     end
-    -- Broad scan fallback: try all VKeys, rely on translate for layout-specific glyphs
+    -- Broad scan fallback with explicit handling for number-row (German layout) and modifiers
+    local keymap = require("gui/utils/keymap")
     for vk = 0x01, 0xFE do
-      if vk ~= VK_RETURN and vk ~= VK_BACK and vk ~= 0x20 then
+      -- Skip non-text navigation keys so they don't generate characters
+      -- Excluded: Enter(0x0D), Backspace(0x08), Space(0x20), Tab(0x09), Arrows(0x25-0x28)
+      if vk ~= 0x0D and vk ~= 0x08 and vk ~= 0x20 and vk ~= 0x09 and vk ~= 0x25 and vk ~= 0x26 and vk ~= 0x27 and vk ~= 0x28 then
         if key_edge(self, vk) then
+          local isShift = is_shift_down()
+          local isCtrl = core.input and core.input.is_key_pressed and core.input.is_key_pressed(0x11)
+          local isAlt  = core.input and core.input.is_key_pressed and core.input.is_key_pressed(0x12)
+          -- Do not insert characters for Ctrl-only combos (shortcuts). Allow AltGr (Ctrl+Alt) to produce glyphs.
+          if isCtrl and not isAlt then goto continue_vk end
+          local mapped = keymap.resolve(vk, isShift, isCtrl, isAlt)
+          if mapped and #mapped > 0 then insert_char(mapped); goto continue_vk end
           local ch = core.graphics and core.graphics.translate_vkey_to_string and core.graphics.translate_vkey_to_string(vk) or nil
+          -- Only accept single-character results from translator; treat longer names as non-text.
           if ch and #ch == 1 then
             local by = string.byte(ch)
-            if by >= 65 and by <= 90 and not is_shift_down() then
+            if by and by >= 65 and by <= 90 and not is_shift_down() then
               ch = string.lower(ch)
             end
             insert_char(ch)
           end
+          ::continue_vk::
         end
       end
     end
+    -- Tab key explicitly inserts a tab character
+    if key_edge(self, 0x09) then insert_char("\t") end
     -- Space key explicit mapping (VK 0x20)
-    local VK_SPACE = 0x20
-    if key_edge(self, VK_SPACE) then
+    if key_edge(self, 0x20) then
       insert_char(" ")
     end
+
+    -- Arrow navigation (Left/Right); supports Shift to extend selection
+    local VK_LEFT, VK_RIGHT = 0x25, 0x27
+    local function move_caret(delta)
+      local txt_len = #(self.text or "")
+      local new_pos = clamp((self._caret or 0) + delta, 0, txt_len)
+      if is_shift_down() then
+        -- start a selection if none exists
+        if not self._sel_anchor then self._sel_anchor = self._caret end
+        self._caret = new_pos
+      else
+        -- collapse selection and move
+        self._sel_anchor = nil
+        self._caret = new_pos
+      end
+    end
+    if key_edge(self, VK_LEFT) then move_caret(-1) end
+    if key_edge(self, VK_RIGHT) then move_caret(1) end
   end
 
   -- render text and selection
-  local pad = 6
-  local base_y = gy + 2
+  local pad = self.transparent and 0 or 6
+  local base_y = gy + (self.transparent and 0 or 2)
   local line_h = constants.FONT_SIZE + 2
   local text = self.text or ""
   local lines, starts = split_lines_with_index(text)
@@ -372,8 +428,8 @@ function Input:render()
     self._caret_t = (self._caret_t or 0) + 1
     if (self._caret_t % 60) < 30 then
       local cx_rel, cy_rel = caret_pos_from_index(text, self._caret)
-      local cx = gx + pad + cx_rel + 1
-      local cy = base_y + cy_rel + 2
+      local cx = gx + pad + cx_rel + (self.transparent and 0 or 1)
+      local cy = base_y + cy_rel + (self.transparent and 0 or 2)
       core.graphics.line_2d(constants.vec2.new(cx, cy), constants.vec2.new(cx, cy + line_h - 4), constants.color.white(230), 1)
     end
   else
@@ -382,6 +438,15 @@ function Input:render()
     if not self.is_focused then constants.is_typing = false; constants.typing_capture = nil end
     self._frame_tick = 0
   end
+end
+
+-- Select all text and focus the input (used for inline rename UX)
+function Input:select_all()
+  self.is_focused = true
+  local len = #(self.text or "")
+  self._caret = len
+  self._sel_anchor = 0
+  self._is_selecting = false
 end
 
 -- no menu proxy/blocker now

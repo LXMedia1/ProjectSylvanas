@@ -30,6 +30,15 @@ function ColorPicker:new(owner_gui, x, y, w, h, color, on_change, opts)
     return o
 end
 
+function ColorPicker:set_visible_if(fn)
+    self.visible_if = fn
+end
+
+function ColorPicker:is_visible()
+    if self.visible_if then return not not self.visible_if(self) end
+    return true
+end
+
 function ColorPicker:get()
     return { r = self.r, g = self.g, b = self.b, a = self.a }
 end
@@ -78,7 +87,7 @@ local function draw_checker(x, y, w, h)
 end
 
 function ColorPicker:render()
-    if not (self.gui and self.gui.is_open) then return end
+    if not (self.gui and self.gui.is_open and self:is_visible()) then return end
     if not core.graphics then return end
 
     local gx, gy = self.gui.x + self.x, self.gui.y + self.y
@@ -122,17 +131,34 @@ function ColorPicker:render()
     end
 
     -- Popup
-    if not self.is_open then return end
+    if not self.is_open then self._popup_abs = nil; return end
     local px = gx
     local py = gy + gh + 4
     local pw = math.max(240, gw)
     local ph = 200
+    -- Reposition to avoid spilling off-screen; prefer flipping above if no vertical space
+    if core.graphics and core.graphics.get_screen_size then
+        local screen = core.graphics.get_screen_size()
+        local margin = 20
+        -- horizontal clamp with extra breathing room
+        if px + pw + margin > screen.x then px = screen.x - pw - margin end
+        if px < margin then px = margin end
+        -- vertical: flip above if bottom would spill
+        if py + ph + margin > screen.y then
+            local try_py = gy - ph - 6
+            if try_py >= margin then py = try_py else py = screen.y - ph - margin end
+        end
+    end
     local col_panel = constants.color.new(18,24,40,240)
     local col_border = constants.color.new(18,22,30,255)
     if core.graphics.rect_2d_filled then
         core.graphics.rect_2d_filled(constants.vec2.new(px, py), pw, ph, col_panel, 6)
         core.graphics.rect_2d(constants.vec2.new(px, py), pw, ph, col_border, 1, 6)
     end
+    -- Block game clicks under popup
+    if constants.hot_zones then table.insert(constants.hot_zones, { x = px, y = py, w = pw, h = ph }) end
+    -- Expose popup rect (absolute) for other UIs (e.g., Designer) to ignore input when interacting with the picker
+    self._popup_abs = { x = px, y = py, w = pw, h = ph }
 
     -- Hue bar (vertical)
     local hue_w = 14
@@ -203,7 +229,7 @@ function ColorPicker:render()
 
     -- Map current RGB to hue for SV
     self._h = self._h or self:_rgb_to_h(self.r, self.g, self.b)
-    -- selectors interactions
+    -- selectors interactions (do not toggle closed while interacting inside)
     if constants.mouse_state.left_down then
         if helpers.is_point_in_rect(mouse.x, mouse.y, hue_x, hue_y, hue_w, hue_h) then
             local rel = math.max(0, math.min(hue_h - 1, mouse.y - hue_y))
@@ -263,7 +289,12 @@ function ColorPicker:render()
         end
     end
 
-    -- Close popup on outside click
+    -- Close popup on Enter/Escape or outside click only (not while dragging inside)
+    local VK_RETURN = 0x0D
+    local VK_ESCAPE = 0x1B
+    if (core.input and core.input.is_key_pressed and (core.input.is_key_pressed(VK_RETURN) or core.input.is_key_pressed(VK_ESCAPE))) then
+        self.is_open = false
+    end
     if constants.mouse_state.left_clicked and not helpers.is_point_in_rect(mouse.x, mouse.y, px, py, pw, ph) and not hovered then
         self.is_open = false
     end

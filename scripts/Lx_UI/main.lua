@@ -29,8 +29,8 @@ local function on_update()
     -- Ensure data folders
     persist.ensure_dirs()
     -- Load plugin settings once
-    if not plugin_cfg_loaded then
-        local cfg = persist.load_plugin() or {}
+        if not plugin_cfg_loaded then
+        	local cfg = persist.load_plugin() or {}
         if tonumber(cfg.launcher_mode) then constants.launcher_mode = tonumber(cfg.launcher_mode) end
         if tonumber(cfg.sidebar_top_offset) then constants.SIDEBAR_TOP_OFFSET = tonumber(cfg.sidebar_top_offset) end
         if tonumber(cfg.palette_top_offset) then constants.PALETTE_TOP_OFFSET = tonumber(cfg.palette_top_offset) end
@@ -39,7 +39,20 @@ local function on_update()
         if launcher_mode_combo and launcher_mode_combo.set then
             launcher_mode_combo:set(constants.launcher_mode or 1)
         end
-        plugin_cfg_loaded = true
+        	-- If offsets were missing in the plugin file, write current values once to stabilize palette/sidebar positions
+        	if (cfg.sidebar_top_offset == nil) or (cfg.palette_top_offset == nil) or (cfg.palette_left_offset == nil) or (cfg.default_launcher == nil) then
+        		persist.save_plugin({
+        			launcher_mode = constants.launcher_mode or 1,
+        			sidebar_top_offset = constants.SIDEBAR_TOP_OFFSET or 80,
+        			palette_top_offset = constants.PALETTE_TOP_OFFSET or 120,
+        			palette_left_offset = constants.PALETTE_LEFT_OFFSET or 0,
+        			default_launcher = constants.__default_launcher or "sidebar",
+        			settings_tab = (settings_gui and settings_gui._tabs and settings_gui._tabs.active_id) or "Active Windows",
+        			settings_visible = (settings_gui and not not settings_gui.is_open) or false,
+        			settings_maximized = (settings_gui and not not settings_gui._maximized) or false
+        		})
+        	end
+        	plugin_cfg_loaded = true
     end
     -- Ensure a copy of logo is present in scripts_data/ressource/logo.png for binary loading
     if core.read_file and core.create_data_folder and core.create_data_file and core.write_data_file and not _G.__lxui_logo_copied then
@@ -76,8 +89,40 @@ local function on_update()
         settings_gui._tabs = settings_gui:AddTabs({
             { id = "Active Windows", label = "Active Windows" },
             { id = "Settings", label = "Settings" },
-            { id = "Editor", label = "Editor" }
+            { id = "UI Designer", label = "UI Designer" }
         }, (constants.HEADER_HEIGHT or 24) + 6)
+        -- restore selected tab and visibility from plugin cfg
+        local pcfg = persist.load_plugin() or {}
+        if pcfg.settings_tab and settings_gui._tabs and settings_gui._tabs.set_active then
+            local desired = (pcfg.settings_tab == "Editor") and "UI Designer" or pcfg.settings_tab
+            settings_gui._tabs:set_active(desired)
+        end
+        -- apply maximized geometry before visibility to avoid flicker
+        -- restore maximized state with preserved original (pre-max) geometry
+        if pcfg.settings_maximized then
+            local scr = core.graphics and core.graphics.get_screen_size and core.graphics.get_screen_size()
+            if scr then
+                -- compute a sane original placement (centered at default size) to restore when unmaximizing
+                local orig_w, orig_h = settings_gui.width, settings_gui.height
+                local orig_x = math.max(0, math.floor((scr.x - orig_w) / 2))
+                local orig_y = math.max(0, math.floor((scr.y - orig_h) / 2))
+                settings_gui._premax = { x = orig_x, y = orig_y, w = orig_w, h = orig_h }
+                -- now apply maximum bounds
+                settings_gui.x, settings_gui.y = 0, 0
+                settings_gui.width, settings_gui.height = scr.x, scr.y
+                settings_gui._maximized = true
+                settings_gui._transparent = false
+                -- we've positioned explicitly; skip on_render centering
+                settings_gui._pos_initialized = true
+            end
+        end
+        if pcfg.settings_visible ~= nil then
+            settings_gui.is_open = not not pcfg.settings_visible
+            if settings_open_checkbox and settings_open_checkbox.set then
+                settings_open_checkbox:set(settings_gui.is_open)
+            end
+        end
+        constants.__settings_loaded = true
         -- remove hint label per request
         settings_gui._hint_label = nil
         settings_gui:set_render_callback(function(gui)
@@ -156,7 +201,9 @@ local function on_update()
                                 sidebar_top_offset = constants.SIDEBAR_TOP_OFFSET or 80,
                                 palette_top_offset = constants.PALETTE_TOP_OFFSET or 120,
                                 palette_left_offset = constants.PALETTE_LEFT_OFFSET or 0,
-                                default_launcher = key
+                                default_launcher = key,
+                                settings_tab = (settings_gui and settings_gui._tabs and settings_gui._tabs.active_id) or "Active Windows",
+                                settings_visible = (settings_gui and not not settings_gui.is_open) or false
                             })
                         end)
                         gui._default_launcher_combo:set_visible_if(function() return gui._tabs:is_active("Settings") end)
@@ -187,7 +234,9 @@ local function on_update()
                                 sidebar_top_offset = constants.SIDEBAR_TOP_OFFSET or 80,
                                 palette_top_offset = constants.PALETTE_TOP_OFFSET or 120,
                                 palette_left_offset = constants.PALETTE_LEFT_OFFSET or 0,
-                                default_launcher = constants.__default_launcher or "sidebar"
+                                default_launcher = constants.__default_launcher or "sidebar",
+                                settings_tab = (settings_gui and settings_gui._tabs and settings_gui._tabs.active_id) or "Active Windows",
+                                settings_visible = (settings_gui and not not settings_gui.is_open) or false
                             })
                         end, { is_float = false })
                         -- Palette X (horizontal)
@@ -197,7 +246,9 @@ local function on_update()
                                 sidebar_top_offset = constants.SIDEBAR_TOP_OFFSET or 80,
                                 palette_top_offset = constants.PALETTE_TOP_OFFSET or 120,
                                 palette_left_offset = constants.PALETTE_LEFT_OFFSET or 0,
-                                default_launcher = constants.__default_launcher or "sidebar"
+                                default_launcher = constants.__default_launcher or "sidebar",
+                                settings_tab = (settings_gui and settings_gui._tabs and settings_gui._tabs.active_id) or "Active Windows",
+                                settings_visible = (settings_gui and not not settings_gui.is_open) or false
                             })
                         end, { is_float = false })
                         -- Palette Y (vertical)
@@ -207,7 +258,9 @@ local function on_update()
                                 sidebar_top_offset = constants.SIDEBAR_TOP_OFFSET or 80,
                                 palette_top_offset = constants.PALETTE_TOP_OFFSET or 120,
                                 palette_left_offset = constants.PALETTE_LEFT_OFFSET or 0,
-                                default_launcher = constants.__default_launcher or "sidebar"
+                                default_launcher = constants.__default_launcher or "sidebar",
+                                settings_tab = (settings_gui and settings_gui._tabs and settings_gui._tabs.active_id) or "Active Windows",
+                                settings_visible = (settings_gui and not not settings_gui.is_open) or false
                             })
                         end, { vertical = true, is_float = false, thickness = 10 })
                         gui._sidebar_y_slider:set_visible_if(function() return gui._tabs:is_active("Settings") end)
@@ -261,8 +314,8 @@ local function on_update()
                     gui._lb_palette:set_items(pal)
                     -- Ensure GUI launcher filtering on-the-fly (renderers read constants.launcher_assignments)
                     -- After repopulating, nothing else to do; assignments already synced above when no drag is active
-                else
-                    -- Editor tab
+                elseif gui._tabs and gui._tabs:is_active("UI Designer") then
+                    -- UI Designer tab
                     if not gui._designer then gui._designer = ui_designer.new(gui) end
                     local ox, oy = gui._tabs:get_content_origin()
                     gui._designer:render(ox, oy)
@@ -282,7 +335,9 @@ local function on_update()
             launcher_mode = constants.launcher_mode,
             sidebar_top_offset = constants.SIDEBAR_TOP_OFFSET or 80,
             palette_top_offset = constants.PALETTE_TOP_OFFSET or 120,
-            palette_left_offset = constants.PALETTE_LEFT_OFFSET or 0
+            palette_left_offset = constants.PALETTE_LEFT_OFFSET or 0,
+            settings_tab = (settings_gui and settings_gui._tabs and settings_gui._tabs.active_id) or "Active Windows",
+            settings_visible = (settings_gui and not not settings_gui.is_open) or false
         })
     else
         constants.launcher_mode = constants.launcher_mode or 1
@@ -299,6 +354,16 @@ local function on_update()
                 if settings_open_checkbox and settings_open_checkbox.set then
                     settings_open_checkbox:set(settings_gui.is_open)
                 end
+                -- Persist visibility and current tab when toggled via F3
+                persist.save_plugin({
+                    launcher_mode = constants.launcher_mode,
+                    sidebar_top_offset = constants.SIDEBAR_TOP_OFFSET or 80,
+                    palette_top_offset = constants.PALETTE_TOP_OFFSET or 120,
+                    palette_left_offset = constants.PALETTE_LEFT_OFFSET or 0,
+                    settings_tab = (settings_gui and settings_gui._tabs and settings_gui._tabs.active_id) or "Active Windows",
+                    settings_visible = not not settings_gui.is_open,
+                    settings_maximized = not not settings_gui._maximized
+                })
             end
             _G.__lxui_prev_f3 = true
         else
@@ -409,18 +474,47 @@ local function on_render_menu()
             if settings_open_checkbox and settings_open_checkbox.render then
                 settings_open_checkbox:render("Open Settings Window", "Show/Hide the Lx_UI Settings window")
                 if settings_gui then
+                    -- One-time sync from persisted config to ensure correct visibility after reload
+                    if not constants.__settings_sync_applied then
+                        local pcfg = persist.load_plugin() or {}
+                        local desired = not not pcfg.settings_visible
+                        if settings_open_checkbox.set then settings_open_checkbox:set(desired) end
+                        settings_gui.is_open = desired
+                        constants.__settings_sync_applied = true
+                    end
                     local state = nil
                     if settings_open_checkbox.get_state then
                         state = settings_open_checkbox:get_state()
                     end
                     if state ~= nil then
                         settings_gui.is_open = state
+                        persist.save_plugin({
+                            launcher_mode = constants.launcher_mode,
+                            sidebar_top_offset = constants.SIDEBAR_TOP_OFFSET or 80,
+                            palette_top_offset = constants.PALETTE_TOP_OFFSET or 120,
+                            palette_left_offset = constants.PALETTE_LEFT_OFFSET or 0,
+                            settings_tab = (settings_gui and settings_gui._tabs and settings_gui._tabs.active_id) or "Active Windows",
+                            settings_visible = not not settings_gui.is_open,
+                            settings_maximized = not not settings_gui._maximized
+                        })
                     end
                 end
             end
             -- Menu offsets removed; sliders are now inside Settings window
             -- Per-GUI enable/disable toggles removed from main menu; handled in Settings window
             rendering.render_menu_controls()
+            -- Persist tab/visibility opportunistically during menu render as well
+            if settings_gui then
+                persist.save_plugin({
+                    launcher_mode = constants.launcher_mode,
+                    sidebar_top_offset = constants.SIDEBAR_TOP_OFFSET or 80,
+                    palette_top_offset = constants.PALETTE_TOP_OFFSET or 120,
+                    palette_left_offset = constants.PALETTE_LEFT_OFFSET or 0,
+                    settings_tab = (settings_gui._tabs and settings_gui._tabs.active_id) or "Active Windows",
+                    settings_visible = not not settings_gui.is_open,
+                    settings_maximized = not not settings_gui._maximized
+                })
+            end
             -- Show a visible text input aligned to the active capture rect to verify routing/positioning
             if constants and constants.is_typing and debug_router_input and debug_router_input.render then
                 if constants.typing_capture then
@@ -461,6 +555,11 @@ local Lx_UI = {
 
         -- Hook movement save on next frame when dragging ends (handled in rendering via flags)
         gui._on_after_move = function()
+            persist.save_window(gui)
+        end
+        -- Hook open/close state persistence on toggle
+        gui._set_open = function(val)
+            gui.is_open = not not val
             persist.save_window(gui)
         end
         return gui

@@ -12,7 +12,7 @@ Human‑like navigation on retail data using mmaps. Computes smooth A* paths acr
 - Simple API surface exposed via `_G.Lx_Nav`
 
 ### Requirements
-1) Download the mmaps navigation data from the Arctium index (Master set): [Arctium Navigation Data](https://tc.arctium.io)
+1) Download the mmaps navigation data from the Arctium index (Master set): [TrinityCore -  Data provided by Arctium.io](https://tc.arctium.io)
 2) Create folder `scripts_data/mmaps`
 3) Place `*.mmap` and all `*.mmtile` files inside `scripts_data/mmaps`
 

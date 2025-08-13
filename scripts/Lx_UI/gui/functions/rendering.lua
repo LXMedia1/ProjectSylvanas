@@ -1,6 +1,19 @@
 local constants = require("gui/utils/constants")
 local input = require("gui/functions/input")
 local helpers = require("gui/utils/helpers")
+local persist = require("gui/utils/persist")
+
+-- Persist visibility helper (supports Settings special-case)
+local function persist_visibility(gui)
+    if not gui then return end
+    if gui.is_settings then
+        if persist and persist.save_plugin then
+            persist.save_plugin({ settings_visible = not not gui.is_open, settings_maximized = not not gui._maximized })
+        end
+    else
+        if persist and persist.save_window then persist.save_window(gui) end
+    end
+end
 
 -- Helper: detect CTRL key state (supports generic and L/R variants)
 local function is_ctrl_down()
@@ -25,7 +38,7 @@ local function render_window(gui)
         core.graphics.rect_2d_filled(origin, gui.width, gui.height, bg, 3)
     end
     -- header bar
-    local hb = constants.color.new(40, 60, 100, 240)
+    local hb = constants.color.new(40, 60, 100, gui._maximized and 255 or 240)
     if core.graphics.rect_2d_filled then
         local origin = constants.vec2.new(gui.x, gui.y)
         core.graphics.rect_2d_filled(origin, gui.width, 24, hb, 3)
@@ -47,8 +60,8 @@ local function render_window(gui)
     local icon_x = gui.x + 7
     local icon_y = gui.y + math.floor((24 - icon_size) / 2)
     local icon_hovered = helpers.is_point_in_rect(mouse.x, mouse.y, icon_x, icon_y, icon_size, icon_size)
-    -- Optional dragging: disabled for fixed windows
-    if not gui.is_fixed then
+    -- Optional dragging: disabled for fixed windows and while maximized
+    if not gui.is_fixed and not gui._maximized then
         gui._dragging = gui._dragging or false
         if icon_hovered and constants.mouse_state.left_down and not gui._dragging then
             gui._dragging = true
@@ -70,6 +83,69 @@ local function render_window(gui)
             else
                 gui._dragging = false
                 if gui._on_after_move then gui._on_after_move() end
+            end
+        end
+    end
+
+    -- Window controls (right side): Min/Max/Close
+    do
+        local btn_w, btn_h = 18, 16
+        local pad = 4
+        local btn_y = gui.y + 4
+        local close_x = gui.x + gui.width - pad - btn_w
+        local max_x = close_x - (btn_w + 4)
+        local min_x = max_x - (btn_w + 4)
+        local m = constants.mouse_state.position
+        local function draw_btn(x, label, hovered)
+            local col = hovered and constants.color.new(200,60,60,240) or constants.color.new(28,38,60,220)
+            core.graphics.rect_2d_filled(constants.vec2.new(x, btn_y), btn_w, btn_h, col, 3)
+            if label == "X" then
+                core.graphics.text_2d("X", constants.vec2.new(x + 6, btn_y + 0), 14, constants.color.white(255), false)
+            elseif label == "[]" then
+                core.graphics.rect_2d(constants.vec2.new(x + 4, btn_y + 4), 10, 8, constants.color.white(240), 1, 0)
+            elseif label == "_" then
+                core.graphics.rect_2d(constants.vec2.new(x + 4, btn_y + 10), 10, 1, constants.color.white(240), 1, 0)
+            end
+        end
+        local over_close = helpers.is_point_in_rect(m.x, m.y, close_x, btn_y, btn_w, btn_h)
+        local over_max = helpers.is_point_in_rect(m.x, m.y, max_x, btn_y, btn_w, btn_h)
+        local over_min = helpers.is_point_in_rect(m.x, m.y, min_x, btn_y, btn_w, btn_h)
+        draw_btn(min_x, "_", over_min)
+        draw_btn(max_x, (gui._maximized and "▢" or "[]"), over_max)
+        draw_btn(close_x, "X", over_close)
+        if constants.mouse_state.left_clicked then
+            if over_close then
+                gui.is_open = false -- hide
+                persist_visibility(gui)
+            elseif over_max then
+                if not gui._maximized then
+                    -- entering maximized: remember original geometry exactly
+                    gui._premax = { x = gui.x, y = gui.y, w = gui.width, h = gui.height }
+                    local scr = core.graphics.get_screen_size()
+                    gui.x, gui.y = 0, 0
+                    gui.width, gui.height = scr.x, scr.y
+                    gui._maximized = true
+                    gui._transparent = false
+                    if gui.is_settings and persist and persist.save_plugin then
+                        persist.save_plugin({ settings_maximized = true })
+                    end
+                else
+                    -- leaving maximized: restore original geometry; do not write back the maximized size
+                    if gui._premax and gui._premax.w and gui._premax.h then
+                        gui.x = gui._premax.x or gui.x
+                        gui.y = gui._premax.y or gui.y
+                        gui.width = gui._premax.w
+                        gui.height = gui._premax.h
+                    end
+                    gui._maximized = false
+                    gui._transparent = nil
+                    if gui.is_settings and persist and persist.save_plugin then
+                        persist.save_plugin({ settings_maximized = false })
+                    end
+                end
+            elseif over_min then
+                gui.is_open = false
+                persist_visibility(gui)
             end
         end
     end
@@ -184,6 +260,12 @@ local function render_window(gui)
             if lb then table.insert(constants.hot_zones, { x = gui.x + (lb.x or 0), y = gui.y + (lb.y or 0), w = lb.w or 0, h = lb.h or 0 }) end
         end
     end
+    if gui._treeviews then
+        for i = 1, #gui._treeviews do
+            local tv = gui._treeviews[i]
+            if tv and tv.render then tv:render() end
+        end
+    end
     if gui._comboboxes then
         for i = 1, #gui._comboboxes do
             local cb = gui._comboboxes[i]
@@ -205,13 +287,7 @@ local function render_window(gui)
             if pb then table.insert(constants.hot_zones, { x = gui.x + (pb.x or 0), y = gui.y + (pb.y or 0), w = pb.w or 0, h = pb.h or 0 }) end
         end
     end
-    if gui._color_pickers then
-        for i = 1, #gui._color_pickers do
-            local cp = gui._color_pickers[i]
-            if cp and cp.render then cp:render() end
-            if cp then table.insert(constants.hot_zones, { x = gui.x + (cp.x or 0), y = gui.y + (cp.y or 0), w = cp.w or 0, h = cp.h or 0 }) end
-        end
-    end
+    -- Code editors removed
     if gui._separators then
         for i = 1, #gui._separators do
             local sp = gui._separators[i]
@@ -233,9 +309,47 @@ local function render_window(gui)
             if lbl and lbl.render then lbl:render() end
         end
     end
+    if gui._windows then
+        for i = 1, #gui._windows do
+            local win = gui._windows[i]
+            if win and win.render then win:render() end
+        end
+    end
+    if gui._warnings then
+        -- render and prune expired warnings
+        local i = 1
+        while i <= #gui._warnings do
+            local w = gui._warnings[i]
+            if w and w.render then w:render() end
+            if not w or (w.is_expired and w:is_expired()) then
+                table.remove(gui._warnings, i)
+            else
+                i = i + 1
+            end
+        end
+    end
+
+    -- Render color pickers last; draw closed ones first, open ones after to ensure popup is on top
+    if gui._color_pickers then
+        local open_list = {}
+        for i = 1, #gui._color_pickers do
+            local cp = gui._color_pickers[i]
+            if cp and cp.is_open then
+                table.insert(open_list, cp)
+            else
+                if cp and cp.render then cp:render() end
+                if cp then table.insert(constants.hot_zones, { x = gui.x + (cp.x or 0), y = gui.y + (cp.y or 0), w = cp.w or 0, h = cp.h or 0 }) end
+            end
+        end
+        for i = 1, #open_list do
+            local cp = open_list[i]
+            if cp and cp.render then cp:render() end
+            if cp then table.insert(constants.hot_zones, { x = gui.x + (cp.x or 0), y = gui.y + (cp.y or 0), w = cp.w or 0, h = cp.h or 0 }) end
+        end
+    end
 
     -- Window resize handle (bottom-right). Disabled for fixed windows.
-    if not gui.is_fixed and core.graphics then
+    if not gui.is_fixed and not gui._maximized and core.graphics then
         local handle_sz = 14
         local hx = gui.x + gui.width - handle_sz
         local hy = gui.y + gui.height - handle_sz
@@ -591,68 +705,98 @@ local function render_all()
             end
         end
     end
-    -- Draw all launcher UIs that have items; default items appear only in the active launcher
-    -- Topbar
-    render_topbar()
-    do
+    -- Draw all launcher UIs only if no window is maximized (to avoid overlap)
+    local any_maximized = false
+    for _, g in pairs(constants.registered_guis) do
+        if g.is_open and g._maximized then any_maximized = true; break end
+    end
+    if not any_maximized then
+        -- Topbar
+        render_topbar()
+        do
         local mouse = constants.mouse_state.position
         for _, tab in ipairs(constants.topbar_tabs or {}) do
             local hovered = (mouse.x >= tab.x and mouse.x <= tab.x + tab.w and mouse.y >= tab.y and mouse.y <= tab.y + tab.h)
             if hovered and constants.mouse_state.left_clicked then
                 if is_ctrl_down() then
                     tab.gui.is_open = not tab.gui.is_open
+                    persist_visibility(tab.gui)
                 else
                     if tab.gui.is_open then
                         tab.gui.is_open = false
+                        persist_visibility(tab.gui)
                     else
-                        for _, g in pairs(constants.registered_guis) do if g ~= tab.gui then g.is_open = false end end
+                        for _, g in pairs(constants.registered_guis) do
+                            if g ~= tab.gui then
+                                g.is_open = false
+                                persist_visibility(g)
+                            end
+                        end
                         tab.gui.is_open = true
+                        persist_visibility(tab.gui)
                     end
                 end
                 if _G and _G.Lx_UI and _G.Lx_UI._persist_assignments then _G.Lx_UI._persist_assignments() end
             end
         end
-    end
-    -- Sidebar
-    render_sidebar()
-    do
+        end
+        -- Sidebar
+        render_sidebar()
+        do
         local mouse = constants.mouse_state.position
         for _, tab in ipairs(constants.sidebar_tabs or {}) do
             local hovered = (mouse.x >= tab.x and mouse.x <= tab.x + tab.w and mouse.y >= tab.y and mouse.y <= tab.y + tab.h)
             if hovered and constants.mouse_state.left_clicked then
                 if is_ctrl_down() then
                     tab.gui.is_open = not tab.gui.is_open
+                    persist_visibility(tab.gui)
                 else
                     if tab.gui.is_open then
                         tab.gui.is_open = false
+                        persist_visibility(tab.gui)
                     else
-                        for _, g in pairs(constants.registered_guis) do if g ~= tab.gui then g.is_open = false end end
+                        for _, g in pairs(constants.registered_guis) do
+                            if g ~= tab.gui then
+                                g.is_open = false
+                                persist_visibility(g)
+                            end
+                        end
                         tab.gui.is_open = true
+                        persist_visibility(tab.gui)
                     end
                 end
                 if _G and _G.Lx_UI and _G.Lx_UI._persist_assignments then _G.Lx_UI._persist_assignments() end
             end
         end
-    end
-    -- Palette
-    render_palette()
-    do
+        end
+        -- Palette
+        render_palette()
+        do
         local mouse = constants.mouse_state.position
         for _, ent in ipairs(constants.palette_entries or {}) do
             local hovered = (mouse.x >= ent.x and mouse.x <= ent.x + ent.w and mouse.y >= ent.y and mouse.y <= ent.y + ent.h)
             if hovered and constants.mouse_state.left_clicked then
                 if is_ctrl_down() then
                     ent.gui.is_open = not ent.gui.is_open
+                    persist_visibility(ent.gui)
                 else
                     if ent.gui.is_open then
                         ent.gui.is_open = false
+                        persist_visibility(ent.gui)
                     else
-                        for _, g in pairs(constants.registered_guis) do if g ~= ent.gui then g.is_open = false end end
+                        for _, g in pairs(constants.registered_guis) do
+                            if g ~= ent.gui then
+                                g.is_open = false
+                                persist_visibility(g)
+                            end
+                        end
                         ent.gui.is_open = true
+                        persist_visibility(ent.gui)
                     end
                 end
                 if _G and _G.Lx_UI and _G.Lx_UI._persist_assignments then _G.Lx_UI._persist_assignments() end
             end
+        end
         end
     end
     -- end-of-frame cleanup for listbox drag payload

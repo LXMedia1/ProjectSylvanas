@@ -14,7 +14,10 @@ local RadioGroup = require("gui/components/radio_group")
 local ProgressBar = require("gui/components/progress_bar")
 local Separator = require("gui/components/separator")
 local ScrollArea = require("gui/components/scroll_area")
+local Treeview = require("gui/components/treeview")
+local Window = require("gui/components/window")
 local ColorPicker = require("gui/components/color_picker")
+local WarningLabel = require("gui/components/warning_label")
 
 local Menu = {}
 Menu.__index = Menu
@@ -189,6 +192,13 @@ function Menu:AddSeparator(x, y, w)
     return sp
 end
 
+function Menu:AddTreeview(x, y, w, h, opts, on_select)
+    local tv = Treeview:new(self, x, y, w, h, opts, on_select)
+    self._treeviews = self._treeviews or {}
+    table.insert(self._treeviews, tv)
+    return tv
+end
+
 function Menu:AddScrollArea(x, y, w, h)
     local sa = ScrollArea:new(self, x, y, w, h)
     self._scroll_areas = self._scroll_areas or {}
@@ -202,6 +212,21 @@ function Menu:AddColorPicker(x, y, w, h, color, on_change, opts)
     table.insert(self._color_pickers, cp)
     return cp
 end
+
+function Menu:AddWindow(title, x, y, w, h)
+    local win = Window:new(self, title, x, y, w, h)
+    self._windows = self._windows or {}
+    table.insert(self._windows, win)
+    return win
+end
+
+function Menu:AddWarning(text, x, y, duration_ms)
+    local wl = WarningLabel:new(self, text, x, y, duration_ms)
+    self._warnings = self._warnings or {}
+    table.insert(self._warnings, wl)
+    return wl
+end
+
 
 return {
     Menu = Menu

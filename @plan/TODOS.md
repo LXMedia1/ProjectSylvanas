@@ -32,4 +32,9 @@ Notes
 - Keep edits small; commit frequently.
 - Respect Lua 5.1 sandbox and require-path rules.
 
+- Docs
+  - Update `@docs/Lx_UI.md` to clarify Designer inline rename: arrow keys move caret/selection (no character insertion).
+  - Document double-click-to-edit behavior: double-click selects full text for quick overwrite.
+  - Note: In inline edit, double-click inside input also selects all; ESC exits edit mode to allow moving components.
+
 

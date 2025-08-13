@@ -73,10 +73,16 @@ preview_gui:set_render_callback(function(gui)
     gui._btn.x, gui._btn.y = xL, y
     gui._chk.x, gui._chk.y = xL + 150, y + 4
     y = y + 34
-    -- Row 2: toggle + radio
+    -- Row 2: toggle + radio (shift radio right to avoid overlap)
     gui._tgl.x, gui._tgl.y = xL, y
-    gui._rg.x,  gui._rg.y  = xL + 60, y - 4
-    y = y + 36
+    gui._rg.x,  gui._rg.y  = xL + 120, y - 4
+    -- Advance by full radio group height (3 rows) so following controls don't overlap
+    do
+        local items_count = (gui._rg and gui._rg.items and #gui._rg.items) or 0
+        local assumed_row_h = 20 -- approx FONT_SIZE + padding in RadioGroup
+        local total_h = items_count * assumed_row_h
+        y = y + math.max(36, total_h)
+    end
     -- Row 3: combo + keybind
     gui._cb.x, gui._cb.y = xL, y
     gui._kb.x, gui._kb.y = xL + 190, y
