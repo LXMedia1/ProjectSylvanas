@@ -18,7 +18,7 @@ function Window:new(owner_gui, title, x, y, w, h)
   o.parent = nil -- windows are never real children; kept for API symmetry
   o.children = {}
   -- styling & behavior
-  o.style = "window" -- window | box | invisible
+  o.style = "box" -- default basic box; available: box | invisible
   o.bg_col = { r = 14, g = 18, b = 30, a = 220 }
   o.border_col = { r = 32, g = 40, b = 70, a = 255 }
   o.header_col = { r = 56, g = 80, b = 140, a = 230 }
@@ -30,6 +30,57 @@ function Window:new(owner_gui, title, x, y, w, h)
   o.start_x = 0
   o.start_y = 0
   return o
+end
+
+-- Returns a structured properties spec for the Designer Optionbox
+function Window.get_properties_spec(comp)
+  comp.header_h = 20
+  comp.style = comp.style or "window"
+  comp.bg_col = comp.bg_col or { r = 14, g = 18, b = 30, a = 220 }
+  comp.border_col = comp.border_col or { r = 32, g = 40, b = 70, a = 255 }
+  comp.header_col = comp.header_col or { r = 56, g = 80, b = 140, a = 230 }
+  return {
+    { type = "spoiler", title = "General", open = true, rows = {
+        { type = "number2", label = "Size (W/H)", get = function() return comp.w or 0, comp.h or 0 end, set = function(w, h) if w and w > 20 then comp.w = math.floor(w) end if h and h > 20 then comp.h = math.floor(h) end end },
+        { type = "checkbox", label = "Start pos: Center", style = "toggle", get = function() return comp.start_center ~= false end, set = function(v) comp.start_center = not not v end },
+        { type = "number2", label = "Start X/Y", visible = function() return comp.start_center == false end,
+          get = function() return comp.start_x or 0, comp.start_y or 0 end, set = function(x, y) comp.start_x = math.floor(x or 0); comp.start_y = math.floor(y or 0) end },
+    }},
+    { type = "spoiler", title = "Header", open = true, rows = {
+        { type = "text", label = "Title", get = function() return tostring(comp.title or "") end, set = function(v) comp.title = tostring(v or "") end },
+        { type = "color", label = "Header Color", get = function() return comp.header_col end, set = function(c) comp.header_col = { r=c.r,g=c.g,b=c.b,a=c.a } end },
+        { type = "color", label = "Title Color", get = function() return comp.title_col or { r=240,g=240,b=245,a=255 } end,
+          set = function(c) comp.title_col = { r=c.r,g=c.g,b=c.b,a=c.a } end },
+    }},
+    { type = "spoiler", title = "Styling", open = true, rows = {
+        -- Colors for window body and border
+        { type = "color", label = "Background", get = function() return comp.bg_col end, set = function(c) comp.bg_col = { r=c.r,g=c.g,b=c.b,a=c.a } end },
+        { type = "color", label = "Border Color", get = function() return comp.border_col end, set = function(c) comp.border_col = { r=c.r,g=c.g,b=c.b,a=c.a } end },
+        { type = "separator" },
+        { type = "checkbox", label = "Allow maximize", style = "toggle", get = function() return comp.allow_maximize end, set = function(v) comp.allow_maximize = not not v end },
+        { type = "combo", label = "Draw Style", items = {"Box","Window","Invisible"}, get_index = function()
+            return (comp.style == "window" and 2) or (comp.style == "invisible" and 3) or 1
+          end,
+          set_index = function(i)
+            comp.style = (i == 2 and "window") or (i == 3 and "invisible") or "box"
+          end },
+        { type = "combo", label = "Click Blocking", items = {"Off","Full","Children only"},
+          get_index = function()
+            if not comp.block_clicks then return 1 end
+            if comp.block_only_children then return 3 end
+            return 2
+          end,
+          set_index = function(i)
+            if i == 1 then
+              comp.block_clicks = false; comp.block_only_children = false
+            elseif i == 2 then
+              comp.block_clicks = true; comp.block_only_children = false
+            else
+              comp.block_clicks = true; comp.block_only_children = true
+            end
+          end },
+    }},
+  }
 end
 
 function Window:set_visible_if(fn) self.visible_if = fn end
@@ -95,20 +146,7 @@ function Window:render()
   if not core.graphics then return end
   local gx, gy = self:_get_origin()
   local bd = _col(self.border_col)
-  if self.style == "window" then
-    local bg = _col(self.bg_col)
-    local hb = _col(self.header_col)
-    if core.graphics.rect_2d_filled then
-      core.graphics.rect_2d_filled(constants.vec2.new(gx, gy), self.w, self.h, bg, 6)
-      core.graphics.rect_2d_filled(constants.vec2.new(gx, gy), self.w, self.header_h, hb, 6)
-    end
-    if core.graphics.rect_2d then
-      core.graphics.rect_2d(constants.vec2.new(gx, gy), self.w, self.h, bd, 1, 6)
-    end
-    if core.graphics.text_2d then
-      core.graphics.text_2d(self.title, constants.vec2.new(gx + 8, gy + math.floor((self.header_h - (constants.FONT_SIZE or 14))/2) - 1), constants.FONT_SIZE, constants.color.white(255), false)
-    end
-  elseif self.style == "box" then
+  if self.style == "box" then
     local bg = _col(self.bg_col)
     if core.graphics.rect_2d_filled then
       core.graphics.rect_2d_filled(constants.vec2.new(gx, gy), self.w, self.h, bg, 6)
@@ -119,181 +157,6 @@ function Window:render()
   else -- invisible: draw nothing (runtime). Designer preview will show a border.
     -- no-op for runtime; consumers can still see children
   end
-end
-
--- Optional: property helpers for Designer integration
-function Window.draw_designer_properties(designer, px, y, col_w, comp)
-  local bd = constants.color.new(32, 40, 70, 255)
-  comp.header_h = 20 -- fixed header height for consistent styling
-  comp.style = comp.style or "window"
-  comp.bg_col = comp.bg_col or { r = 14, g = 18, b = 30, a = 220 }
-  comp.border_col = comp.border_col or { r = 32, g = 40, b = 70, a = 255 }
-  comp.header_col = comp.header_col or { r = 56, g = 80, b = 140, a = 230 }
-  -- Section: Positioning
-  core.graphics.text_2d("Positioning", constants.vec2.new(px + 10, y), 12, constants.color.white(230), false)
-  y = y + 14
-  -- size W/H inputs
-  do
-    core.graphics.text_2d("Size (W/H)", constants.vec2.new(px + 10, y), 12, constants.color.white(220), false)
-    local ix = px + 10 + 90
-    local iw = math.floor((col_w - 90 - 24) / 2)
-    designer._win_size_w = designer._win_size_w or designer.gui:AddInput(ix - designer.gui.x, y - designer.gui.y, iw, 18, { multiline = false, text = tostring(comp.w or 0) }, function(_, val)
-      local n = tonumber(val); if n and n > 20 then comp.w = math.floor(n) end
-    end)
-    designer._win_size_h = designer._win_size_h or designer.gui:AddInput(ix - designer.gui.x + iw + 8, y - designer.gui.y, iw, 18, { multiline = false, text = tostring(comp.h or 0) }, function(_, val)
-      local n = tonumber(val); if n and n > 20 then comp.h = math.floor(n) end
-    end)
-    designer._win_size_w:set_visible_if(function() return designer.selected == comp end)
-    designer._win_size_h:set_visible_if(function() return designer.selected == comp end)
-    designer._win_size_w.x = ix - designer.gui.x
-    designer._win_size_w.y = y - designer.gui.y
-    designer._win_size_h.x = ix - designer.gui.x + iw + 8
-    designer._win_size_h.y = y - designer.gui.y
-    designer._win_size_w.w = iw
-    designer._win_size_h.w = iw
-    if not designer._win_size_w.is_focused then designer._win_size_w:set_text(tostring(comp.w or 0)) end
-    if not designer._win_size_h.is_focused then designer._win_size_h:set_text(tostring(comp.h or 0)) end
-    y = y + 22
-  end
-  -- start position
-  do
-    comp.start_center = (comp.start_center ~= false)
-    local lbl = "Start pos: Center"
-    core.graphics.text_2d(lbl, constants.vec2.new(px + 10, y), 12, constants.color.white(220), false)
-    local cbx, cby, cbs = px + col_w - 20, y, 12
-    core.graphics.rect_2d(constants.vec2.new(cbx, cby), cbs, cbs, bd, 1, 2)
-    if comp.start_center then core.graphics.rect_2d_filled(constants.vec2.new(cbx + 2, cby + 2), cbs - 4, cbs - 4, constants.color.new(120,190,255,255), 2) end
-    if constants.mouse_state.left_clicked then
-      local mx, my = constants.mouse_state.position.x, constants.mouse_state.position.y
-      if mx >= cbx and mx <= cbx + cbs and my >= cby and my <= cby + cbs then comp.start_center = not comp.start_center end
-    end
-    y = y + 18
-    if not comp.start_center then
-      core.graphics.text_2d("Start X/Y", constants.vec2.new(px + 10, y), 12, constants.color.white(220), false)
-      local ix = px + 10 + 90
-      local iw = math.floor((col_w - 90 - 24) / 2)
-      designer._win_start_x = designer._win_start_x or designer.gui:AddInput(ix - designer.gui.x, y - designer.gui.y, iw, 18, { multiline = false, text = tostring(comp.start_x or 0) }, function(_, val)
-        local n = tonumber(val); if n then comp.start_x = math.floor(n) end
-      end)
-      designer._win_start_y = designer._win_start_y or designer.gui:AddInput(ix - designer.gui.x + iw + 8, y - designer.gui.y, iw, 18, { multiline = false, text = tostring(comp.start_y or 0) }, function(_, val)
-        local n = tonumber(val); if n then comp.start_y = math.floor(n) end
-      end)
-      designer._win_start_x:set_visible_if(function() return designer.selected == comp and not comp.start_center end)
-      designer._win_start_y:set_visible_if(function() return designer.selected == comp and not comp.start_center end)
-      designer._win_start_x.x = ix - designer.gui.x
-      designer._win_start_x.y = y - designer.gui.y
-      designer._win_start_y.x = ix - designer.gui.x + iw + 8
-      designer._win_start_y.y = y - designer.gui.y
-      designer._win_start_x.w = iw
-      designer._win_start_y.w = iw
-      if not designer._win_start_x.is_focused then designer._win_start_x:set_text(tostring(comp.start_x or 0)) end
-      if not designer._win_start_y.is_focused then designer._win_start_y:set_text(tostring(comp.start_y or 0)) end
-      y = y + 22
-    end
-  end
-  -- separator
-  core.graphics.rect_2d(constants.vec2.new(px + 10, y), col_w - 20, 1, constants.color.new(40, 48, 72, 200), 1, 0)
-  y = y + 10
-  -- Section: Styling
-  core.graphics.text_2d("Styling", constants.vec2.new(px + 10, y), 12, constants.color.white(230), false)
-  y = y + 14
-  -- fixed header height (no stepper)
-  core.graphics.text_2d("Header H", constants.vec2.new(px + 10, y), 12, constants.color.white(200), false)
-  core.graphics.text_2d("20", constants.vec2.new(px + 10 + 90, y), 12, constants.color.white(220), false)
-  y = y + 16
-  -- color pickers
-  do
-    core.graphics.text_2d("Header Color", constants.vec2.new(px + 10, y), 12, constants.color.white(220), false)
-    designer._win_header_cp = designer._win_header_cp or designer.gui:AddColorPicker(px + 100 - designer.gui.x, y - designer.gui.y, col_w - 110, 20, comp.header_col, function(_, c)
-      comp.header_col = { r = c.r, g = c.g, b = c.b, a = c.a }
-    end)
-    designer._win_header_cp:set_visible_if(function() return designer.selected == comp and comp.style == "window" end)
-    designer._win_header_cp.x = px + 100 - designer.gui.x
-    designer._win_header_cp.y = y - designer.gui.y
-    designer._win_header_cp.w = col_w - 110
-    y = y + 24
-    core.graphics.text_2d("Background", constants.vec2.new(px + 10, y), 12, constants.color.white(220), false)
-    designer._win_bg_cp = designer._win_bg_cp or designer.gui:AddColorPicker(px + 100 - designer.gui.x, y - designer.gui.y, col_w - 110, 20, comp.bg_col, function(_, c)
-      comp.bg_col = { r = c.r, g = c.g, b = c.b, a = c.a }
-    end)
-    designer._win_bg_cp:set_visible_if(function() return designer.selected == comp and (comp.style == "window" or comp.style == "box") end)
-    designer._win_bg_cp.x = px + 100 - designer.gui.x
-    designer._win_bg_cp.y = y - designer.gui.y
-    designer._win_bg_cp.w = col_w - 110
-    y = y + 24
-  end
-  -- maximize option
-  do
-    local lbl = "Allow maximize"
-    core.graphics.text_2d(lbl, constants.vec2.new(px + 10, y), 12, constants.color.white(220), false)
-    local cbx, cby, cbs = px + col_w - 20, y, 12
-    core.graphics.rect_2d(constants.vec2.new(cbx, cby), cbs, cbs, bd, 1, 2)
-    if comp.allow_maximize then core.graphics.rect_2d_filled(constants.vec2.new(cbx + 2, cby + 2), cbs - 4, cbs - 4, constants.color.new(120,190,255,255), 2) end
-    if constants.mouse_state.left_clicked then
-      local mx, my = constants.mouse_state.position.x, constants.mouse_state.position.y
-      if mx >= cbx and mx <= cbx + cbs and my >= cby and my <= cby + cbs then comp.allow_maximize = not comp.allow_maximize end
-    end
-    y = y + 18
-  end
-  -- separator
-  core.graphics.rect_2d(constants.vec2.new(px + 10, y), col_w - 20, 1, constants.color.new(40, 48, 72, 200), 1, 0)
-  y = y + 10
-  -- Section: Draw Style
-  core.graphics.text_2d("Draw Style", constants.vec2.new(px + 10, y), 12, constants.color.white(230), false)
-  y = y + 14
-  -- style combobox
-  local items = { "Window", "Box", "Invisible" }
-  local idx = (comp.style == "box" and 2) or (comp.style == "invisible" and 3) or 1
-  designer._win_style_cb = designer._win_style_cb or designer.gui:AddCombobox(px + 10 - designer.gui.x, y - designer.gui.y, col_w - 20, 20, items, idx, function(_, i)
-    comp.style = (i == 2 and "box") or (i == 3 and "invisible") or "window"
-  end, nil)
-  designer._win_style_cb:set_visible_if(function() return designer.selected == comp end)
-  designer._win_style_cb.x = px + 10 - designer.gui.x
-  designer._win_style_cb.y = y - designer.gui.y
-  designer._win_style_cb.w = col_w - 20
-  -- keep selection synced
-  if designer._win_style_cb.set_selected_index then
-    local cur = (comp.style == "box" and 2) or (comp.style == "invisible" and 3) or 1
-    if designer._win_style_cb.get_selected_index and designer._win_style_cb:get_selected_index() ~= cur then
-      designer._win_style_cb:set_selected_index(cur)
-    end
-  end
-  y = y + 24
-  -- block clicks
-  do
-    local lbl = "Block clicks"
-    core.graphics.text_2d(lbl, constants.vec2.new(px + 10, y), 12, constants.color.white(220), false)
-    local cbx, cby, cbs = px + col_w - 20, y, 12
-    core.graphics.rect_2d(constants.vec2.new(cbx, cby), cbs, cbs, bd, 1, 2)
-    if comp.block_clicks then core.graphics.rect_2d_filled(constants.vec2.new(cbx + 2, cby + 2), cbs - 4, cbs - 4, constants.color.new(120,190,255,255), 2) end
-    if constants.mouse_state.left_clicked then
-      local mx, my = constants.mouse_state.position.x, constants.mouse_state.position.y
-      if mx >= cbx and mx <= cbx + cbs and my >= cby and my <= cby + cbs then comp.block_clicks = not comp.block_clicks end
-    end
-    y = y + 18
-    if comp.style == "invisible" then
-      core.graphics.text_2d("Block only children", constants.vec2.new(px + 10, y), 12, constants.color.white(220), false)
-      local cbx2, cby2, cbs2 = px + col_w - 20, y, 12
-      core.graphics.rect_2d(constants.vec2.new(cbx2, cby2), cbs2, cbs2, bd, 1, 2)
-      if comp.block_only_children then core.graphics.rect_2d_filled(constants.vec2.new(cbx2 + 2, cby2 + 2), cbs2 - 4, cbs2 - 4, constants.color.new(120,190,255,255), 2) end
-      if constants.mouse_state.left_clicked then
-        local mx, my = constants.mouse_state.position.x, constants.mouse_state.position.y
-        if mx >= cbx2 and mx <= cbx2 + cbs2 and my >= cby2 and my <= cby2 + cbs2 then comp.block_only_children = not comp.block_only_children end
-      end
-      y = y + 18
-    end
-  end
-  -- Title text color
-  core.graphics.text_2d("Title Color", constants.vec2.new(px + 10, y), 12, constants.color.white(220), false)
-  designer._win_title_cp = designer._win_title_cp or designer.gui:AddColorPicker(px + 100 - designer.gui.x, y - designer.gui.y, col_w - 110, 20, comp.title_col or { r = 240, g = 240, b = 245, a = 255 }, function(_, c)
-    comp.title_col = { r = c.r, g = c.g, b = c.b, a = c.a }
-  end)
-  designer._win_title_cp:set_visible_if(function() return designer.selected == comp end)
-  designer._win_title_cp.x = px + 100 - designer.gui.x
-  designer._win_title_cp.y = y - designer.gui.y
-  designer._win_title_cp.w = col_w - 110
-  y = y + 24
-  return y
 end
 
 return Window

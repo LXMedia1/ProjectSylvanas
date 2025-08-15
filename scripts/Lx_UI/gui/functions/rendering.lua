@@ -30,18 +30,109 @@ end
 local _gui_key_capture_deadline_ms = 0
 
 local function render_window(gui)
+    -- Animation timing
+    do
+        local now_raw = (core.time and core.time()) or 0
+        local last_raw = gui._anim_last_raw or now_raw
+        gui._anim_last_raw = now_raw
+        -- Auto-convert time to milliseconds if engine returns seconds
+        local dt_raw = now_raw - last_raw
+        local dt_ms = dt_raw
+        if dt_ms <= 1 then dt_ms = dt_ms * 1000 end
+        gui._anim_last_ms = (gui._anim_last_ms or 0) + dt_ms
+        if gui._prev_open ~= gui.is_open then
+            -- state changed → start appropriate animation
+            gui._prev_open = gui.is_open
+            if gui.is_open then
+                gui._anim_active = gui._anim and gui._anim.enabled or false
+                gui._anim_kind = "in"
+                gui._anim_t = 0
+            else
+                gui._anim_active = gui._anim and gui._anim.enabled or false
+                gui._anim_kind = "out"
+                gui._anim_t = 0
+            end
+        end
+        -- Safety: if somehow marked as fading-out while open, flip to fade-in
+        if gui.is_open and gui._anim_kind == "out" then
+            gui._anim_kind = "in"
+            -- keep accumulated t so we don't pop
+        end
+        if gui._anim_active then gui._anim_t = (gui._anim_t or 0) + dt_ms end
+    end
+
     -- No external image loading; header art is drawn procedurally
     -- background
-    local bg = constants.color.new(20, 20, 30, 220)
-    if core.graphics.rect_2d_filled then
-        local origin = constants.vec2.new(gui.x, gui.y)
-        core.graphics.rect_2d_filled(origin, gui.width, gui.height, bg, 3)
+    local bg_base_a = 220
+    local anim_alpha = 255
+    if gui._anim_active and gui._anim and gui._anim.enabled ~= false then
+        local cfg = gui._anim
+        if gui._anim_kind == "in" then
+            local t = math.min(gui._anim_t / math.max(1, (cfg.fade_in_ms or 220)), 1)
+            anim_alpha = math.floor(255 * t + 0.5)
+            if t >= 1 then gui._anim_active = false end
+        elseif gui._anim_kind == "out" then
+            local t = math.min(gui._anim_t / math.max(1, (cfg.fade_out_ms or 180)), 1)
+            anim_alpha = math.floor(255 * (1 - t) + 0.5)
+            if t >= 1 then gui._anim_active = false end
+        end
     end
-    -- header bar
-    local hb = constants.color.new(40, 60, 100, gui._maximized and 255 or 240)
-    if core.graphics.rect_2d_filled then
+    local style = tostring(gui.style or "flat")
+    if style == "futuristic" then
+        -- Futuristic shell: sharp frame, neon outlines, hologram plates
+        local frame = constants.color.new(20, 28, 46, math.max(0, math.min(anim_alpha or 255, bg_base_a)))
+        local panel = constants.color.new(24, 26, 38, math.max(0, math.min(anim_alpha or 255, 210)))
+        local neon  = constants.color.new(120, 200, 255, 220)
+        local glow  = constants.color.new(60, 120, 200, 180)
         local origin = constants.vec2.new(gui.x, gui.y)
-        core.graphics.rect_2d_filled(origin, gui.width, 24, hb, 3)
+        -- outer frame (no rounding)
+        core.graphics.rect_2d_filled(origin, gui.width, gui.height, frame, 0)
+        -- chamfers carved
+        local ch = 10
+        for i = 0, ch - 1 do
+            core.graphics.rect_2d_filled(constants.vec2.new(gui.x, gui.y + i), i + 1, 1, panel, 0)
+            core.graphics.rect_2d_filled(constants.vec2.new(gui.x + gui.width - (i + 1), gui.y + i), i + 1, 1, panel, 0)
+            core.graphics.rect_2d_filled(constants.vec2.new(gui.x, gui.y + gui.height - 1 - i), i + 1, 1, panel, 0)
+            core.graphics.rect_2d_filled(constants.vec2.new(gui.x + gui.width - (i + 1), gui.y + gui.height - 1 - i), i + 1, 1, panel, 0)
+        end
+        -- inner panel
+        local inset = 6
+        core.graphics.rect_2d_filled(constants.vec2.new(gui.x + inset, gui.y + inset), gui.width - inset * 2, gui.height - inset * 2, panel, 0)
+        core.graphics.rect_2d(constants.vec2.new(gui.x + inset, gui.y + inset), gui.width - inset * 2, gui.height - inset * 2, glow, 1, 0)
+        core.graphics.rect_2d(constants.vec2.new(gui.x + 1, gui.y + 1), gui.width - 2, gui.height - 2, neon, 1, 0)
+        -- header hologram accents within top band area (24px)
+        local top = gui.y + 6
+        -- slanted plates
+        for i = 0, 6 do
+            core.graphics.rect_2d_filled(constants.vec2.new(gui.x + inset + i, top + i), 30 - i, 1, constants.color.white(245), 0)
+        end
+        local cx = gui.x + math.floor(gui.width / 2) - 40
+        for i = 0, 6 do
+            core.graphics.rect_2d_filled(constants.vec2.new(cx + i, top + i), 80 - i * 2, 1, constants.color.white(245), 0)
+        end
+        -- moving scanline
+        if core.time then
+            local t = core.time() / 1000.0
+            local band_y = gui.y + 6 + (math.floor(((t * 40) % 18)))
+            core.graphics.rect_2d_filled(constants.vec2.new(gui.x + inset + ch, band_y), gui.width - (inset * 2 + ch * 2), 1, neon, 0)
+        end
+        -- title
+        core.graphics.text_2d(gui.name or "Window", constants.vec2.new(gui.x + 12, gui.y + 6), constants.FONT_SIZE, constants.color.white(250), false)
+    else
+        if core.graphics.rect_2d_filled then
+            local origin = constants.vec2.new(gui.x, gui.y)
+            local final_a = math.max(0, math.min(anim_alpha or 255, bg_base_a))
+            local bg_col = constants.color.new(20, 20, 30, final_a)
+            core.graphics.rect_2d_filled(origin, gui.width, gui.height, bg_col, 3)
+        end
+        -- header bar
+        local hb_base_a = gui._maximized and 255 or 240
+        if core.graphics.rect_2d_filled then
+            local origin = constants.vec2.new(gui.x, gui.y)
+            local final_hb_a = math.max(0, math.min(anim_alpha or 255, hb_base_a))
+            local hb_col = constants.color.new(40, 60, 100, final_hb_a)
+            core.graphics.rect_2d_filled(origin, gui.width, 24, hb_col, 3)
+        end
     end
     -- header height cached for layout
     local header_h = constants.HEADER_HEIGHT or 24
@@ -51,7 +142,8 @@ local function render_window(gui)
         local text_x = gui.x + 8 + icon_size + 8
         local title_y = gui.y + 5
         -- If settings banner present, ensure the content text below header aligns after banner
-        core.graphics.text_2d(gui.name or "Window", constants.vec2.new(text_x, title_y), constants.FONT_SIZE, constants.color.white(255), false)
+        local ta = constants.color.white(math.max(0, math.min(255, anim_alpha)))
+        core.graphics.text_2d(gui.name or "Window", constants.vec2.new(text_x, title_y), constants.FONT_SIZE, ta, false)
     end
 
     -- Drag handling via a small move icon on the LEFT side only
@@ -180,10 +272,17 @@ local function render_window(gui)
         core.graphics.line_2d(constants.vec2.new(cx, cy + shaft_len + head_len), constants.vec2.new(cx - head_len, cy + shaft_len), c, w)
         core.graphics.line_2d(constants.vec2.new(cx, cy + shaft_len + head_len), constants.vec2.new(cx + head_len, cy + shaft_len), c, w)
     end
-    -- content rendering via window-specific callback
-    if gui.render_callback then
-        gui.render_callback(gui)
+    -- Render Optionboxes before callback so panel contents (labels/controls) drawn in callback appear above
+    if gui._optionboxes then
+        for i = 1, #gui._optionboxes do
+            local ob = gui._optionboxes[i]
+            if ob and ob.render then ob:render() end
+            if ob then table.insert(constants.hot_zones, { x = gui.x + (ob.x or 0), y = gui.y + (ob.y or 0), w = ob.w or 0, h = ob.h or 0 }) end
+        end
     end
+
+    -- content rendering via window-specific callback (e.g., Designer)
+    if gui.render_callback then gui.render_callback(gui) end
 
     -- render components (tabs first, then containers, then widgets)
     if gui._tabbars then
@@ -237,13 +336,7 @@ local function render_window(gui)
             end
         end
     end
-    if gui._text_inputs then
-        for i = 1, #gui._text_inputs do
-            local ti = gui._text_inputs[i]
-            if ti and ti.render then ti:render() end
-            if ti then table.insert(constants.hot_zones, { x = gui.x + (ti.x or 0), y = gui.y + (ti.y or 0), w = ti.w or 0, h = ti.h or 0 }) end
-        end
-    end
+    -- Moved text input rendering later (after optionboxes) to ensure correct z-order
     -- After drawing, render tiny aligned menu windows + inputs so focused text boxes capture keys
     if gui._text_inputs then
         for i = 1, #gui._text_inputs do
@@ -267,8 +360,19 @@ local function render_window(gui)
         end
     end
     if gui._comboboxes then
+        -- Render closed comboboxes first, then open ones last so their dropdowns are on top of color pickers
+        local open_list = {}
         for i = 1, #gui._comboboxes do
             local cb = gui._comboboxes[i]
+            if cb and cb.is_open then
+                table.insert(open_list, cb)
+            else
+                if cb and cb.render then cb:render() end
+                if cb then table.insert(constants.hot_zones, { x = gui.x + (cb.x or 0), y = gui.y + (cb.y or 0), w = cb.w or 0, h = cb.h or 0 }) end
+            end
+        end
+        for i = 1, #open_list do
+            local cb = open_list[i]
             if cb and cb.render then cb:render() end
             if cb then table.insert(constants.hot_zones, { x = gui.x + (cb.x or 0), y = gui.y + (cb.y or 0), w = cb.w or 0, h = cb.h or 0 }) end
         end
@@ -315,6 +419,17 @@ local function render_window(gui)
             if win and win.render then win:render() end
         end
     end
+    -- Draw Optionboxes after windows so the Properties panel stays on top of canvas content
+    -- Ensure text inputs and color pickers render above base widgets
+    -- Optionboxes and their spoilers should be on top of canvas windows, but below popups
+    -- Optionboxes were rendered before callback
+    if gui._text_inputs then
+        for i = 1, #gui._text_inputs do
+            local ti = gui._text_inputs[i]
+            if ti and ti.render then ti:render() end
+            if ti then table.insert(constants.hot_zones, { x = gui.x + (ti.x or 0), y = gui.y + (ti.y or 0), w = ti.w or 0, h = ti.h or 0 }) end
+        end
+    end
     if gui._warnings then
         -- render and prune expired warnings
         local i = 1
@@ -343,6 +458,13 @@ local function render_window(gui)
         end
         for i = 1, #open_list do
             local cp = open_list[i]
+            -- If a color picker claims it's open but its GUI is not visible anymore, force close
+            if (not gui.is_open) or (cp and cp.is_open and not cp:is_visible()) then
+                if cp then
+                    cp.is_open = false
+                    if gui._active_color_picker == cp then gui._active_color_picker = nil end
+                end
+            end
             if cp and cp.render then cp:render() end
             if cp then table.insert(constants.hot_zones, { x = gui.x + (cp.x or 0), y = gui.y + (cp.y or 0), w = cp.w or 0, h = cp.h or 0 }) end
         end

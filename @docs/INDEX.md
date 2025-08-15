@@ -14,6 +14,7 @@ Lx_Nav Documentation Index
 
 - Lx_UI: Overview: `Lx_UI.md`
   - Lx_UI API: `Lx_UI_API.md`
+  - Color Picker styles: see `Lx_UI.md` (Color Picker section)
 
 
 

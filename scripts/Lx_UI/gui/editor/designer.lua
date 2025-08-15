@@ -13,12 +13,15 @@ local palette_defs = {
   { id = "slider",   name = "Slider",   w = 180, h = 12,  cat = "Inputs" },
   { id = "listbox",  name = "Listbox",  w = 180, h = 160, cat = "Inputs" },
   { id = "input",    name = "Input",    w = 200, h = 22,  cat = "Inputs" },
+  { id = "colorpicker", name = "ColorPicker", w = 160, h = 22, cat = "Inputs" },
     { id = "keybind",  name = "Keybind",  w = 200, h = 22,  cat = "Inputs" },
     { id = "toggle",   name = "Toggle",   w = 46,  h = 22,  cat = "Inputs" },
     { id = "radio",    name = "RadioGroup", w = 160, h = 48, cat = "Inputs" },
     { id = "progress", name = "ProgressBar", w = 200, h = 14, cat = "Basic" },
     { id = "separator",name = "Separator", w = 200, h = 1,  cat = "Basic" },
   { id = "window",   name = "Window",   w = 320, h = 220, cat = "Containers" },
+  { id = "optionbox",name = "Optionbox",w = 240, h = 200, cat = "Containers" },
+  { id = "spoiler",  name = "Spoiler",  w = 220, h = 24,  cat = "Containers" },
   { id = "panel",    name = "Panel",    w = 220, h = 160, cat = "Containers" },
     { id = "scroll",   name = "ScrollArea", w = 220, h = 160, cat = "Containers" },
 }
@@ -69,6 +72,9 @@ function Designer:new(owner_gui)
   o._toast_until = 0
   o._toast_text = nil
   o._toast_x, o._toast_y = 0, 0
+  -- dynamic properties sections (per selected component)
+  o._comp_spoilers = nil
+  o._last_selected_ref = nil
   return o
 end
 -- Snap helper: align component to neighbors when close (vertical stack and left-edge align)
@@ -78,7 +84,11 @@ function Designer:_compute_snapping(comp)
   local function eff_xy(c)
     local x, y = (c.x or 0), (c.y or 0)
     local p = c.parent
+    local guard = 0
     while p do
+      -- cycle/overflow guard to prevent infinite loops if a bad parent graph occurs
+      guard = guard + 1
+      if guard > 16 or p == c then break end
       x = x + (p.x or 0)
       y = y + (p.y or 0)
       p = p.parent
@@ -159,7 +169,30 @@ local function get_def(kind)
 end
 
 local function is_container_kind(kind)
-  return kind == "window" or kind == "panel" or kind == "scroll"
+  return kind == "window" or kind == "panel" or kind == "scroll" or kind == "optionbox" or kind == "spoiler"
+end
+
+-- Header inset height for parent windows (child area excludes header for non-invisible styles)
+local function get_header_inset(win)
+  if not win or win.kind ~= "window" then return 0 end
+  local st = tostring(win.style or "window")
+  if st == "invisible" then return 0 end
+  if st == "leftbar" then return 0 end
+  if st == "clean" then return 28 end
+  if st == "flat" then return 24 end
+  if st == "win95" then return 18 end
+  -- defaults for styles with a standard header bar
+  local hh = tonumber(win.header_h or 20) or 20
+  if hh < 0 then hh = 0 end
+  return hh
+end
+
+-- For styles with vertical header bar at left, compute left inset instead of top
+local function get_left_inset(win)
+  if not win or win.kind ~= "window" then return 0 end
+  local st = tostring(win.style or "window")
+  if st == "leftbar" then return 36 end
+  return 0
 end
 
 -- Generate a unique component name like label_1, label_2 per kind
@@ -188,6 +221,26 @@ function Designer:add_component(kind, x, y)
   comp.name = candidate
   table.insert(self.components, comp)
   self.selected = comp
+end
+
+-- Remove a component from the canvas, handling parent-child lists
+function Designer:_remove_component(comp)
+  if not comp then return end
+  -- If this component has a parent, remove from the parent's children
+  if comp.parent and comp.parent.children then
+    local arr = comp.parent.children
+    for i = #arr, 1, -1 do
+      if arr[i] == comp then table.remove(arr, i) break end
+    end
+  else
+    -- Otherwise remove from root components list
+    for i = #self.components, 1, -1 do
+      if self.components[i] == comp then table.remove(self.components, i) break end
+    end
+  end
+  if self.selected == comp then self.selected = nil end
+  -- Close context menu if it was targeting this component
+  if self._ctx_target == comp then self._ctx_open = false; self._ctx_target = nil end
 end
 
 local function draw_button(x, y, w, h, label, comp)
@@ -258,6 +311,108 @@ local function draw_component(comp, x, y)
     core.graphics.rect_2d_filled(constants.vec2.new(x, y), w, h, constants.color.new(20, 26, 42, 245), 4)
     core.graphics.rect_2d(constants.vec2.new(x, y), w, h, constants.color.new(32, 40, 70, 255), 1, 4)
     core.graphics.text_2d(comp.text or "Input", constants.vec2.new(x + 6, y - 1), constants.FONT_SIZE, constants.color.white(255), false)
+  elseif k == "colorpicker" then
+    -- draw preview to match real ColorPicker (closed state), honoring styles
+    local function draw_checker(cx, cy, cw, ch)
+      local c1 = constants.color.new(200,200,200,255)
+      local c2 = constants.color.new(240,240,240,255)
+      local sz = 6
+      for yy = cy, cy + ch - 1, sz do
+        for xx = cx, cx + cw - 1, sz do
+          local even = (math.floor((xx - cx)/sz) + math.floor((yy - cy)/sz)) % 2 == 0
+          if core.graphics.rect_2d_filled then
+            core.graphics.rect_2d_filled(constants.vec2.new(xx, yy), math.min(sz, cx + cw - xx), math.min(sz, cy + ch - yy), even and c1 or c2, 0)
+          end
+        end
+      end
+    end
+    local bd = constants.color.new(18,22,30,220)
+    local base_bg = constants.color.new(30,46,80,220)
+    local csrc = comp.color or comp.default_color or { r = 240, g = 240, b = 245, a = 255 }
+    local label = comp.placeholder or "Choose"
+    local fs = (constants.FONT_SIZE or 14)
+    local style = tostring(comp.style or "classic")
+    -- outer frame
+    core.graphics.rect_2d_filled(constants.vec2.new(x, y), w, h, base_bg, 6)
+    core.graphics.rect_2d(constants.vec2.new(x, y), w, h, bd, 1, 6)
+    if style == "classic" then
+      local sw = h - 6
+      local sx, sy = x + 4, y + 3
+      draw_checker(sx, sy, sw, sw)
+      core.graphics.rect_2d_filled(constants.vec2.new(sx, sy), sw, sw, constants.color.new(csrc.r or 240, csrc.g or 240, csrc.b or 245, csrc.a or 255), 3)
+      core.graphics.rect_2d(constants.vec2.new(sx, sy), sw, sw, bd, 1, 3)
+      local px0 = x + sw + 8
+      local pw0 = math.max(0, w - (sw + 12))
+      local col = constants.color.new(csrc.r or 240, csrc.g or 240, csrc.b or 245, math.min(235, (csrc.a or 255)))
+      core.graphics.rect_2d_filled(constants.vec2.new(px0, y + 3), pw0, h - 6, col, 4)
+      core.graphics.rect_2d(constants.vec2.new(px0, y + 3), pw0, h - 6, bd, 1, 4)
+      local tw = (core.graphics.get_text_width and core.graphics.get_text_width(label, fs, 0)) or 0
+      local tx = px0 + math.max(0, math.floor((pw0 - tw) / 2))
+      local ty = y + math.floor((h - fs) / 2) - 1
+      local lum = (0.299 * (csrc.r or 240) + 0.587 * (csrc.g or 240) + 0.114 * (csrc.b or 245))
+      local txt_col = (lum > 140) and constants.color.new(20,20,24,240) or constants.color.white(245)
+      core.graphics.text_2d(label, constants.vec2.new(tx, ty), fs, txt_col, false)
+    elseif style == "split" then
+      local split_w = math.max(24, math.floor(w * 0.4))
+      local col = constants.color.new(csrc.r or 240, csrc.g or 240, csrc.b or 245, math.min(235, (csrc.a or 255)))
+      core.graphics.rect_2d_filled(constants.vec2.new(x + 2, y + 2), split_w - 4, h - 4, col, 5)
+      core.graphics.rect_2d(constants.vec2.new(x + 2, y + 2), split_w - 4, h - 4, bd, 1, 5)
+      core.graphics.rect_2d_filled(constants.vec2.new(x + split_w, y + 4), 2, h - 8, constants.color.new(18,22,30,180), 1)
+      local tw = (core.graphics.get_text_width and core.graphics.get_text_width(label, fs, 0)) or 0
+      local tx = x + split_w + math.max(6, math.floor((w - split_w - tw) / 2))
+      local ty = y + math.floor((h - fs) / 2) - 1
+      core.graphics.text_2d(label, constants.vec2.new(tx, ty), fs, constants.color.white(245), false)
+    elseif style == "neon" then
+      -- Neon: glow outlines, colored left dot, centered label, underline
+      local accent_r, accent_g, accent_b = csrc.r or 240, csrc.g or 240, csrc.b or 245
+      local pulse = 0.5
+      if core.time then
+        local t = core.time() / 1000.0
+        pulse = 0.5 + 0.5 * math.sin(t * 3.2)
+      end
+      local glow_a = math.floor(120 + 90 * pulse)
+      local glow = constants.color.new(accent_r, accent_g, accent_b, glow_a)
+      core.graphics.rect_2d(constants.vec2.new(x, y), w, h, glow, 2, 8)
+      core.graphics.rect_2d(constants.vec2.new(x + 2, y + 2), w - 4, h - 4, constants.color.new(accent_r, accent_g, accent_b, math.floor(glow_a * 0.6)), 1, 7)
+      local dot_d = h - 10
+      local dx = x + 6
+      local dy = y + 5
+      core.graphics.rect_2d_filled(constants.vec2.new(dx, dy), dot_d, dot_d, constants.color.new(accent_r, accent_g, accent_b, csrc.a or 255), math.floor(dot_d/2))
+      core.graphics.rect_2d(constants.vec2.new(dx, dy), dot_d, dot_d, constants.color.new(accent_r, accent_g, accent_b, 255), 1, math.floor(dot_d/2))
+      local tw = (core.graphics.get_text_width and core.graphics.get_text_width(label, fs, 0)) or 0
+      local tx = x + math.max(dot_d + 12, math.floor((w - tw)/2))
+      local ty = y + math.floor((h - fs) / 2) - 1
+      core.graphics.text_2d(label, constants.vec2.new(tx, ty), fs, constants.color.white(250), false)
+      core.graphics.rect_2d_filled(constants.vec2.new(x + 8, y + h - 3), w - 16, 2, glow, 2)
+    elseif style == "glass" then
+      -- Glassmorphism: translucent inner card, glossy top band, color capsule
+      local glass_bg = constants.color.new(255, 255, 255, 22)
+      local glass_bd = constants.color.new(200, 220, 255, 180)
+      core.graphics.rect_2d_filled(constants.vec2.new(x + 2, y + 2), w - 4, h - 4, glass_bg, 8)
+      core.graphics.rect_2d(constants.vec2.new(x + 2, y + 2), w - 4, h - 4, glass_bd, 1, 8)
+      local gloss_h = math.max(2, math.floor(h * 0.35))
+      core.graphics.rect_2d_filled(constants.vec2.new(x + 4, y + 3), w - 8, gloss_h, constants.color.new(255,255,255,26), 6)
+      local cap_w = h - 6
+      local cxp = x + 5
+      local cyp = y + 3
+      draw_checker(cxp, cyp, cap_w, cap_w)
+      core.graphics.rect_2d_filled(constants.vec2.new(cxp, cyp), cap_w, cap_w, constants.color.new(csrc.r or 240, csrc.g or 240, csrc.b or 245, csrc.a or 255), math.floor(cap_w/2))
+      core.graphics.rect_2d(constants.vec2.new(cxp, cyp), cap_w, cap_w, constants.color.new(18,22,30,160), 1, math.floor(cap_w/2))
+      local tw = (core.graphics.get_text_width and core.graphics.get_text_width(label, fs, 0)) or 0
+      local tx = x + math.max(cap_w + 10, math.floor((w - tw)/2))
+      local ty = y + math.floor((h - fs) / 2) - 1
+      core.graphics.text_2d(label, constants.vec2.new(tx, ty), fs, constants.color.white(240), false)
+    else
+      local dot_d = h - 8
+      local dx = x + 6
+      local dy = y + 4
+      core.graphics.rect_2d_filled(constants.vec2.new(dx, dy), dot_d, dot_d, constants.color.new(csrc.r or 240, csrc.g or 240, csrc.b or 245, csrc.a or 255), math.floor(dot_d/2))
+      core.graphics.rect_2d(constants.vec2.new(dx, dy), dot_d, dot_d, bd, 1, math.floor(dot_d/2))
+      local tw = (core.graphics.get_text_width and core.graphics.get_text_width(label, fs, 0)) or 0
+      local tx = x + math.max(dot_d + 10, math.floor((w - tw)/2))
+      local ty = y + math.floor((h - fs) / 2) - 1
+      core.graphics.text_2d(label, constants.vec2.new(tx, ty), fs, constants.color.white(245), false)
+    end
   elseif k == "panel" then
     core.graphics.rect_2d_filled(constants.vec2.new(x, y), w, h, constants.color.new(14, 18, 30, 220), 6)
     core.graphics.rect_2d(constants.vec2.new(x, y), w, h, constants.color.new(32, 40, 70, 255), 1, 6)
@@ -282,12 +437,22 @@ local function draw_component(comp, x, y)
   elseif k == "scroll" then
     core.graphics.rect_2d_filled(constants.vec2.new(x, y), w, h, constants.color.new(14, 18, 30, 220), 6)
     core.graphics.rect_2d(constants.vec2.new(x, y), w, h, constants.color.new(32, 40, 70, 255), 1, 6)
+  elseif k == "optionbox" then
+    -- header + body outline
+    core.graphics.rect_2d_filled(constants.vec2.new(x, y), w, h, constants.color.new(14,18,30,220), 6)
+    core.graphics.rect_2d(constants.vec2.new(x, y), w, h, constants.color.new(32,40,70,255), 1, 6)
+    core.graphics.text_2d(comp.title or "Optionbox", constants.vec2.new(x + 8, y + 2), constants.FONT_SIZE, constants.color.white(235), false)
+  elseif k == "spoiler" then
+    local hdr_h = 20
+    core.graphics.rect_2d_filled(constants.vec2.new(x, y), w, hdr_h, constants.color.new(20,26,42,235), 4)
+    core.graphics.rect_2d(constants.vec2.new(x, y), w, comp.h or 24, constants.color.new(32,40,70,255), 1, 4)
+    core.graphics.text_2d(comp.title or "Spoiler", constants.vec2.new(x + 20, y + 2), constants.FONT_SIZE, constants.color.white(235), false)
   elseif k == "window" then
     local function to_col(c)
       if type(c) == "table" then return constants.color.new(c.r or 0, c.g or 0, c.b or 0, c.a or 255) end
       return c
     end
-    local style = comp.style or "window"
+    local style = comp.style or "box"
     local border = to_col(comp.border_col or { r = 32, g = 40, b = 70, a = 255 })
     if style == "window" then
       local hb = to_col(comp.header_col or { r = 56, g = 80, b = 140, a = 230 })
@@ -297,9 +462,20 @@ local function draw_component(comp, x, y)
       core.graphics.rect_2d_filled(constants.vec2.new(x, y), w, 20, hb, 6)
       local tc = to_col(comp.title_col or { r = 240, g = 240, b = 245, a = 255 })
       core.graphics.text_2d(comp.title or comp.name or "Window", constants.vec2.new(x + 8, y + 2), constants.FONT_SIZE, tc, false)
-      local hint = "(drop items here)"
-      core.graphics.text_2d(hint, constants.vec2.new(x + 8, y + 26), 12, constants.color.white(120), false)
+      if not comp.children or #comp.children == 0 then
+      if not comp.children or #comp.children == 0 then
+        local hint = "(drop items here)"
+        core.graphics.text_2d(hint, constants.vec2.new(x + 8, y + 26), 12, constants.color.white(120), false)
+      end
+      end
     elseif style == "box" then
+      local bg = to_col(comp.bg_col or { r = 14, g = 18, b = 30, a = 220 })
+      core.graphics.rect_2d_filled(constants.vec2.new(x, y), w, h, bg, 6)
+      core.graphics.rect_2d(constants.vec2.new(x, y), w, h, border, 1, 6)
+      local tc = to_col(comp.title_col or { r = 240, g = 240, b = 245, a = 255 })
+      core.graphics.text_2d(comp.title or comp.name or "Window", constants.vec2.new(x + 8, y + 2), constants.FONT_SIZE, tc, false)
+    elseif style ~= "box" and style ~= "window" then
+      -- Reduce to basic styles only (box/invisible) for now
       local bg = to_col(comp.bg_col or { r = 14, g = 18, b = 30, a = 220 })
       core.graphics.rect_2d_filled(constants.vec2.new(x, y), w, h, bg, 6)
       core.graphics.rect_2d(constants.vec2.new(x, y), w, h, border, 1, 6)
@@ -490,40 +666,79 @@ function Designer:render(ox, oy)
             if point_in_rect(m.x, m.y, wx, wy, c.w, c.h) then parent = c; break end
           end
         end
-        -- Enforce: non-container components must be dropped inside a parent
+        -- Enforce: Window is the ONLY base container. All other kinds must be dropped inside a Window.
         local new_kind = self._palette_drag_kind
-        if (not parent) and (not is_container_kind(new_kind)) then
-          -- do not create; show a brief pulsing warning label component
+        if (not parent) and (new_kind ~= "window") then
+          -- do not create; show a brief pulsing warning
           if self.gui and self.gui.AddWarning then
-            local msg = "Drop inside a parent (Window/Panel/Scroll)"
+            local msg = "Drop inside a Window"
             local wx = m.x - self.gui.x + 12
             local wy = m.y - self.gui.y + 12
             self.gui:AddWarning(msg, wx, wy, 1400)
           else
             -- fallback toast (unlikely)
-            self._toast_text = "Drop inside a parent (Window/Panel/Scroll)"
+            self._toast_text = "Drop inside a Window"
             self._toast_until = (core.time() or 0) + 1400
             self._toast_x, self._toast_y = m.x + 12, m.y + 12
           end
         else
-          -- clamp to canvas bounds
-        cx = math.max(0, math.min(cx, (canvas_x + canvas_w) - self.gui.x - (def and def.w or self._drag_w)))
-        cy = math.max(0, math.min(cy, (canvas_y + canvas_h) - self.gui.y - (def and def.h or self._drag_h)))
+        -- clamp to canvas bounds (full component inside)
+        do
+          local min_x = (canvas_x - self.gui.x)
+          local min_y = (canvas_y - self.gui.y)
+          local max_x = (canvas_x + canvas_w) - self.gui.x - (def and def.w or self._drag_w)
+          local max_y = (canvas_y + canvas_h) - self.gui.y - (def and def.h or self._drag_h)
+          cx = math.max(min_x, math.min(cx, max_x))
+          cy = math.max(min_y, math.min(cy, max_y))
+        end
           self:add_component(new_kind, cx, cy)
           if parent and new_kind ~= "window" then
             local child = self.selected
-            -- Convert position to parent's local coordinates
-            child.x = (child.x or 0) - (parent.x or 0)
-            child.y = (child.y or 0) - (parent.y or 0)
-            child.parent = parent
-            parent.children = parent.children or {}
-            table.insert(parent.children, child)
+            if child and (child.parent ~= parent) then
+              -- Convert position to parent's local coordinates; exclude header area for non-invisible styles
+              local inset_y = get_header_inset(parent)
+              child.x = (child.x or 0) - (parent.x or 0)
+              child.y = (child.y or 0) - (parent.y or 0) - inset_y
+              child.parent = parent
+              parent.children = parent.children or {}
+              table.insert(parent.children, child)
+              -- Optionbox specifics: when dropping a spoiler into an optionbox, snap height
+              if parent.kind == "optionbox" and new_kind == "spoiler" then
+                child.h = child.h or 24
+              end
+              -- Clamp child inside parent's bounds immediately on drop
+              local left_inset = get_left_inset(parent)
+              local pw = (parent.w or 0) - left_inset
+              local ph = (parent.h or 0) - inset_y
+              local cw = child.w or 0
+              local ch = child.h or 0
+              local max_cx = math.max(0, pw - cw)
+              local max_cy = math.max(0, ph - ch)
+              child.x = math.max(0, math.min(child.x or 0, max_cx))
+              child.y = math.max(0, math.min(child.y or 0, max_cy))
+            end
+            -- Do not instantiate live controls for design-time components
           end
-          local nx, ny = self:_compute_snapping(self.selected)
-          if self.selected then
-            self.selected.x, self.selected.y = nx, ny
+        -- On the drop frame, skip snapping to avoid feedback loops; only clamp
+        if self.selected then
+          local aw = self.selected.w or 0
+          local ah = self.selected.h or 0
+          if parent then
+            local inset_y = get_header_inset(parent)
+            local max_x = math.max(0, (parent.w or 0) - aw)
+            local max_y = math.max(0, ((parent.h or 0) - inset_y) - ah)
+            self.selected.x = math.max(0, math.min(self.selected.x or 0, max_x))
+            self.selected.y = math.max(0, math.min(self.selected.y or 0, max_y))
+          else
+            local min_x = (canvas_x - self.gui.x)
+            local min_y = (canvas_y - self.gui.y)
+            local max_x = (canvas_x + canvas_w) - self.gui.x - aw
+            local max_y = (canvas_y + canvas_h) - self.gui.y - ah
+            self.selected.x = math.max(min_x, math.min(self.selected.x or 0, max_x))
+            self.selected.y = math.max(min_y, math.min(self.selected.y or 0, max_y))
           end
-          self._snap_guides = nil
+        end
+        self._snap_guides = nil
         end
       end
       self._palette_dragging = false
@@ -566,7 +781,8 @@ function Designer:render(ox, oy)
       local c = self.components[i]
       local parent_offset_x = (c.parent and c.parent.x) or 0
       local parent_offset_y = (c.parent and c.parent.y) or 0
-      local cx, cy = self.gui.x + parent_offset_x + c.x, self.gui.y + parent_offset_y + c.y
+      local header_inset = (c.parent and get_header_inset(c.parent)) or 0
+      local cx, cy = self.gui.x + parent_offset_x + c.x, self.gui.y + parent_offset_y + header_inset + c.y
       -- resize: allow for window components only
       local hs = 10
       if c.kind == "window" and point_in_rect(m.x, m.y, cx + c.w - hs, cy + c.h - hs, hs, hs) then
@@ -626,7 +842,7 @@ function Designer:render(ox, oy)
             self._inline_input.is_focused = true
             constants.is_typing = true
             local cur = tostring((c.kind == "panel" and c.title) or c.text or "")
-            self._inline_input:set_text(cur)
+              self._inline_input:set_text(cur)
             if self._inline_input and self._inline_input.select_all then self._inline_input:select_all() end
             -- do not start dragging on this frame
             self.dragging = false
@@ -702,7 +918,23 @@ function Designer:render(ox, oy)
         -- Handle resizing for Window
         if self.resizing and self.selected and self.selected.kind == "window" then
           local sel = self.selected
+          -- Minimum size: keep all children fully visible inside the window
           local minw, minh = 60, 60
+          if sel.children and #sel.children > 0 then
+            local req_w, req_h = 0, 0
+            for j = 1, #sel.children do
+              local ch = sel.children[j]
+              local cw = (ch and ch.w) or 0
+              local chh = (ch and ch.h) or 0
+              local cx = (ch and ch.x) or 0
+              local cy = (ch and ch.y) or 0
+              if cw > 0 then req_w = math.max(req_w, cx + cw) end
+              if chh > 0 then req_h = math.max(req_h, cy + chh) end
+            end
+            -- Small cushion to avoid zero-margin clipping
+            minw = math.max(minw, req_w)
+            minh = math.max(minh, req_h)
+          end
           local parent = sel.parent
           local px, py = 0, 0
           if parent then px = parent.x or 0; py = parent.y or 0 end
@@ -710,6 +942,20 @@ function Designer:render(ox, oy)
           local base_y = self.gui.y + py + sel.y
           local nw = m.x - base_x
           local nh = m.y - base_y
+          -- Clamp resized size so the window stays inside the canvas
+          do
+            local max_w = (canvas_x + canvas_w) - base_x
+            local max_h = (canvas_y + canvas_h) - base_y
+            if max_w and max_w < nw then nw = max_w end
+            if max_h and max_h < nh then nh = max_h end
+            -- Also clamp position if top/left would escape
+            local min_ax = (canvas_x - self.gui.x)
+            local min_ay = (canvas_y - self.gui.y)
+            local cur_ax = (parent and parent.x or 0) + (sel.x or 0)
+            local cur_ay = (parent and parent.y or 0) + (sel.y or 0)
+            if cur_ax < min_ax then sel.x = min_ax - (parent and parent.x or 0) end
+            if cur_ay < min_ay then sel.y = min_ay - (parent and parent.y or 0) end
+          end
           if nw > minw then sel.w = nw end
           if nh > minh then sel.h = nh end
         else
@@ -719,21 +965,64 @@ function Designer:render(ox, oy)
           local parent = target.parent
           local px, py = 0, 0
           if parent then px = parent.x or 0; py = parent.y or 0 end
+          local inset = get_header_inset(parent)
           target.x = (m.x - (self.gui.x + px)) - self._offx
-          target.y = (m.y - (self.gui.y + py)) - self._offy
+          target.y = (m.y - (self.gui.y + py + inset)) - self._offy
         else
           self.selected.x = (m.x - self.gui.x) - self._offx
           self.selected.y = (m.y - self.gui.y) - self._offy
         end
+        -- Clamp moved component: children inside parent, roots inside canvas
+        do
+          local sel = self.selected
+          local aw = sel.w or 0
+          local ah = sel.h or 0
+          if sel.parent then
+            local inset = get_header_inset(sel.parent)
+            local left_inset = get_left_inset(sel.parent)
+            local max_x = math.max(0, ((sel.parent.w or 0) - left_inset) - aw)
+            local max_y = math.max(0, ((sel.parent.h or 0) - inset) - ah)
+            sel.x = math.max(0, math.min(sel.x or 0, max_x))
+            sel.y = math.max(0, math.min(sel.y or 0, max_y))
+          else
+            local min_x = (canvas_x - self.gui.x)
+            local min_y = (canvas_y - self.gui.y)
+            local max_x = (canvas_x + canvas_w) - self.gui.x - aw
+            local max_y = (canvas_y + canvas_h) - self.gui.y - ah
+            sel.x = math.max(min_x, math.min(sel.x or 0, max_x))
+            sel.y = math.max(min_y, math.min(sel.y or 0, max_y))
+          end
         end
-        if math.abs(m.x - self._start_drag_x) > 2 or math.abs(m.y - self._start_drag_y) > 2 then
-          self._last_click_was_drag = true
         end
+          if math.abs(m.x - self._start_drag_x) > 2 or math.abs(m.y - self._start_drag_y) > 2 then
+            self._last_click_was_drag = true
+          end
         -- live snapping while dragging (not during resize)
         if not self.resizing then
           local nx, ny, guides = self:_compute_snapping(self.selected)
           -- Always apply snapped local coordinates (function already returns parent-local values)
           self.selected.x, self.selected.y = nx, ny
+          -- Clamp after snapping too
+          do
+            local sel = self.selected
+            local aw = sel.w or 0
+            local ah = sel.h or 0
+            if sel.parent then
+              local inset = get_header_inset(sel.parent)
+              local left_inset = get_left_inset(sel.parent)
+              local max_x = math.max(0, ((sel.parent.w or 0) - left_inset) - aw)
+              local max_y = math.max(0, ((sel.parent.h or 0) - inset) - ah)
+              sel.x = math.max(0, math.min(sel.x or 0, max_x))
+              sel.y = math.max(0, math.min(sel.y or 0, max_y))
+            else
+              local min_x = (canvas_x - self.gui.x)
+              local min_y = (canvas_y - self.gui.y)
+              local max_x = (canvas_x + canvas_w) - self.gui.x - aw
+              local max_y = (canvas_y + canvas_h) - self.gui.y - ah
+              sel.x = math.max(min_x, math.min(sel.x or 0, max_x))
+              sel.y = math.max(min_y, math.min(sel.y or 0, max_y))
+            end
+          end
           self._snap_guides = guides
         else
           self._snap_guides = nil
@@ -749,23 +1038,19 @@ function Designer:render(ox, oy)
 
   -- delete selected
   if core.input and core.input.is_key_pressed and core.input.is_key_pressed(VK_DELETE) then
-    if self.selected then
-      for i = #self.components, 1, -1 do
-        if self.components[i] == self.selected then table.remove(self.components, i) break end
-      end
-      self.selected = nil
-    end
+    if self.selected then self:_remove_component(self.selected) end
   end
 
   -- draw components: only root-level here; draw each parent's children relative to it
   for i = 1, #self.components do
     local c = self.components[i]
     if not c.parent then
-      draw_component(c, self.gui.x + c.x, self.gui.y + c.y)
+    draw_component(c, self.gui.x + c.x, self.gui.y + c.y)
       if c.children and #c.children > 0 then
+        local inset = (c.kind == "window" and get_header_inset(c)) or 0
         for j = 1, #c.children do
           local ch = c.children[j]
-          draw_component(ch, self.gui.x + c.x + (ch.x or 0), self.gui.y + c.y + (ch.y or 0))
+          draw_component(ch, self.gui.x + c.x + (ch.x or 0), self.gui.y + c.y + inset + (ch.y or 0))
         end
       end
     end
@@ -799,148 +1084,201 @@ function Designer:render(ox, oy)
     self._treeview.w = col_w
     self._treeview.h = tree_h
 
-    -- Properties panel below treeview, filling remaining space
+    -- Properties area switched to Optionbox-based layout
     local props_y = canvas_y + tree_h + 10
     local props_h = math.max(60, canvas_h - tree_h - 10)
-    core.graphics.rect_2d_filled(constants.vec2.new(px, props_y), col_w, props_h, bg, 6)
-    core.graphics.rect_2d(constants.vec2.new(px, props_y), col_w, props_h, bd, 1, 6)
-    core.graphics.text_2d("Properties", constants.vec2.new(px + 10, props_y + 6), constants.FONT_SIZE, constants.color.white(240), false)
-    local y = props_y + 26
-    -- Label/value rows (checkbox rows)
-    local function row(label, value, on_toggle)
-      core.graphics.text_2d(label, constants.vec2.new(px + 8, y), 12, constants.color.white(230), false)
-      y = y + 16
-      if on_toggle ~= nil then
-        local cb = { x = px + 8, y = y, s = 12 }
-        core.graphics.rect_2d(constants.vec2.new(cb.x, cb.y), cb.s, cb.s, bd, 1, 2)
-        if value then core.graphics.rect_2d_filled(constants.vec2.new(cb.x + 2, cb.y + 2), cb.s - 4, cb.s - 4, constants.color.new(120,190,255,255), 2) end
-        if point_in_rect(constants.mouse_state.position.x, constants.mouse_state.position.y, cb.x, cb.y, cb.s + 140, cb.s) and constants.mouse_state.left_clicked then
-          on_toggle(not value)
-        end
-        y = y + 18
-      end
+    -- Create or update an Optionbox
+    self._props_ob = self._props_ob or self.gui:AddOptionbox("Properties", px - self.gui.x, props_y - self.gui.y, col_w, props_h)
+    self._props_ob.x = px - self.gui.x; self._props_ob.y = props_y - self.gui.y; self._props_ob.w = col_w; self._props_ob.h = props_h
+    if self._props_ob.set_visible_if then
+      self._props_ob:set_visible_if(function() return self.selected ~= nil end)
     end
-    if self.selected then
-      -- Name (UID) field
-      -- Inline label + input: Name: [........]
-      local label = "Name:"
-      local lw = (core.graphics.get_text_width and core.graphics.get_text_width(label, 12, 0)) or 42
-      core.graphics.text_2d(label, constants.vec2.new(px + 10, y), 12, constants.color.white(235), false)
-      local input_x = px + 10 + lw + 6
-      local input_w = col_w - lw - 16
-      if not self._props_name_input then
-        self._props_name_input = self.gui:AddInput(input_x - self.gui.x, y - self.gui.y, input_w, 20, { multiline = false, text = tostring(self.selected.name or "") }, function(_, val)
-          -- live validate
-          local ok = true
-          local v = tostring(val or "")
-          if v == "" then ok = false end
-          for i = 1, #self.components do
-            local c2 = self.components[i]
-            if c2 ~= self.selected and c2.name == v then ok = false break end
-          end
-          self._prop_name_valid = ok
-        end)
-        self._props_name_input:set_visible_if(function() return self.selected ~= nil end)
-      end
-      -- sync & position
-      self._props_name_input.x = input_x - self.gui.x
-      self._props_name_input.y = y - self.gui.y
-      self._props_name_input.w = input_w
-      local cur_name = tostring(self.selected.name or "")
-      if self._props_name_input:get_text() ~= cur_name and not self._props_name_input.is_focused then
-        self._props_name_input:set_text(cur_name)
-      end
-      -- color feedback (border/underline)
-      local name_col = self._prop_name_valid and constants.color.white(235) or constants.color.new(230, 80, 80, 255)
-      core.graphics.rect_2d(constants.vec2.new(input_x, y), input_w, 20, name_col, 1, 4)
-      -- commit on Enter if valid; show success flash
-      if self._props_name_input.is_focused then
-        local VK_RETURN = 0x0D
-        if core.input.is_key_pressed and core.input.is_key_pressed(VK_RETURN) and self._prop_name_valid then
-          self.selected.name = self._props_name_input:get_text()
-          self._prop_name_commit_until = (core.time() or 0) + 1000
-          self._props_name_input.is_focused = false
-        end
-      end
-      -- success tick display
-      if (core.time() or 0) < (self._prop_name_commit_until or 0) then
-        local tick_col = constants.color.new(120, 220, 140, 255)
-        local tx = input_x + input_w - 14
-        local ty = y + 5
-        core.graphics.line_2d(constants.vec2.new(tx + 0, ty + 6), constants.vec2.new(tx + 4, ty + 10), tick_col, 2)
-        core.graphics.line_2d(constants.vec2.new(tx + 4, ty + 10), constants.vec2.new(tx + 12, ty + 0), tick_col, 2)
-      elseif not self._prop_name_valid then
-        local x_col = constants.color.new(230, 80, 80, 255)
-        local cx = input_x + input_w - 12
-        local cy = y + 4
-        core.graphics.line_2d(constants.vec2.new(cx, cy), constants.vec2.new(cx + 8, cy + 8), x_col, 2)
-        core.graphics.line_2d(constants.vec2.new(cx + 8, cy), constants.vec2.new(cx, cy + 8), x_col, 2)
-      end
-      y = y + 26
-
-      -- Text (drawn string) field when applicable
-      local tlabel = "Title:"
-      local tlw = (core.graphics.get_text_width and core.graphics.get_text_width(tlabel, 12, 0)) or 46
-      core.graphics.text_2d(tlabel, constants.vec2.new(px + 10, y), 12, constants.color.white(235), false)
-      local text_x = px + 10 + tlw + 6
-      local text_w = col_w - tlw - 16
-      if not self._props_text_input then
-        local initial_text
-        if self.selected.kind == "panel" or self.selected.kind == "window" then
-          initial_text = tostring(self.selected.title or "")
-        else
-          initial_text = tostring(self.selected.text or "")
-        end
-        self._props_text_input = self.gui:AddInput(text_x - self.gui.x, y - self.gui.y, text_w, 20, { multiline = false, text = initial_text }, function(_, val)
-          if self.selected then
-            if self.selected.kind == "panel" or self.selected.kind == "window" then
-              self.selected.title = val
-            else
-              self.selected.text = val
-            end
-          end
-        end)
-        self._props_text_input:set_visible_if(function() return self.selected ~= nil end)
-      end
-      self._props_text_input.x = text_x - self.gui.x
-      self._props_text_input.y = y - self.gui.y
-      self._props_text_input.w = text_w
-      do
-        local cur_disp
-        if self.selected.kind == "panel" or self.selected.kind == "window" then
-          cur_disp = tostring(self.selected.title or "")
-        else
-          cur_disp = tostring(self.selected.text or "")
-        end
-        -- Keep user edits while focused; when not focused, sync to the selected component
-        if self._props_text_input.is_focused then
-          local val = self._props_text_input:get_text()
-          if self.selected then
-            if self.selected.kind == "panel" or self.selected.kind == "window" then
-              self.selected.title = val
-            else
-              self.selected.text = val
-            end
-          end
-        else
-          if self._props_text_input:get_text() ~= cur_disp then
-            self._props_text_input:set_text(cur_disp)
-          end
-        end
-      end
-      core.graphics.rect_2d(constants.vec2.new(text_x, y), text_w, 20, constants.color.white(50), 1, 4)
-      y = y + 26
-
-      -- Professional separators and future options
-      core.graphics.rect_2d(constants.vec2.new(px + 10, y), col_w - 20, 1, constants.color.new(40, 48, 72, 200), 1, 0)
-      y = y + 10
-      -- (Bold/Underline removed)
-      if self.selected.kind == "window" then
+    -- Build spoilers dynamically per selection (shared General + component groups)
+    local need_rebuild = (self._last_selected_ref ~= self.selected) or (not self._sp_general)
+    if need_rebuild then
+      self._last_selected_ref = self.selected
+      self._props_ob:clear()
+      -- Shared General
+      self._sp_general = self.gui:AddSpoiler("General", 20, 80)
+      self._props_ob:add_child(self._sp_general)
+      self._sp_general.is_open = true; self._sp_general.h = self._sp_general.h_expanded
+      -- Component-provided groups
+      self._comp_spoilers = {}
+      if self.selected and self.selected.kind == "window" then
         local WindowComp = require("gui/components/window")
-        if WindowComp and WindowComp.draw_designer_properties then
-          y = WindowComp.draw_designer_properties(self, px, y, col_w, self.selected)
+        local spec = WindowComp.get_properties_spec and WindowComp.get_properties_spec(self.selected)
+        if spec then
+          local function measure_group_height(rows)
+            local h = 6
+            for i = 1, #rows do
+              local row = rows[i]
+              if (not row.visible) or row.visible() then
+                if row.type == "color" then h = h + 24
+                elseif row.type == "checkbox" then h = h + 18
+                elseif row.type == "number2" then h = h + 22
+                elseif row.type == "combo" then h = h + 42
+                elseif row.type == "separator" then h = h + 14
+                else h = h + 18 end
+              end
+            end
+            return math.max(40, h + 6)
+          end
+          for i = 1, #spec do
+            local g = spec[i]
+            local title = tostring(g.title or ("Section " .. i))
+            local h_exp = measure_group_height(g.rows or {})
+            local sp = self.gui:AddSpoiler(title, 20, h_exp)
+            sp.is_open = (g.open ~= false)
+            sp.h = sp.is_open and sp.h_expanded or sp.h_collapsed
+            -- bind declarative rows to the spoiler itself so Optionbox owns rendering
+            if sp.set_rows then sp:set_rows(g.rows or {}, { gui = self.gui }) end
+            self._props_ob:add_child(sp)
+            table.insert(self._comp_spoilers, sp)
+          end
+        end
+      elseif self.selected and self.selected.kind == "colorpicker" then
+        local CP = require("gui/components/color_picker")
+        local spec = CP.get_properties_spec and CP.get_properties_spec(self.selected)
+        if spec then
+          local function measure_group_height(rows)
+            local h = 6
+            for i = 1, #rows do
+              local row = rows[i]
+              if (not row.visible) or row.visible() then
+                if row.type == "color" then h = h + 24
+                elseif row.type == "checkbox" then h = h + 18
+                elseif row.type == "number2" then h = h + 22
+                elseif row.type == "combo" then h = h + 42
+                elseif row.type == "separator" then h = h + 14
+                elseif row.type == "text" then h = h + 22
+                else h = h + 18 end
+              end
+            end
+            return math.max(40, h + 6)
+          end
+          for i = 1, #spec do
+            local g = spec[i]
+            local title = tostring(g.title or ("Section " .. i))
+            local h_exp = measure_group_height(g.rows or {})
+            local sp = self.gui:AddSpoiler(title, 20, h_exp)
+            sp.is_open = (g.open ~= false)
+            sp.h = sp.is_open and sp.h_expanded or sp.h_collapsed
+            if sp.set_rows then sp:set_rows(g.rows or {}, { gui = self.gui }) end
+            self._props_ob:add_child(sp)
+            table.insert(self._comp_spoilers, sp)
+          end
         end
       end
+      if self._props_ob and self._props_ob._layout_children then self._props_ob:_layout_children() end
+    end
+    -- helpers to place rows inside a spoiler body
+    local function spoiler_body_top(sp)
+      local ob = self._props_ob
+      local ob_abs_y = self.gui.y + ob.y
+      local top = ob_abs_y + (sp.y or 0) + 20 - (ob.scroll_y or 0)
+      local abs_x = self.gui.x + ob.x
+      return abs_x, top
+    end
+    local label_col = function() return constants.color.white(230) end
+    local row_x_pad = 10
+    local inner_w = (self._props_ob and (self._props_ob.w - 12)) or col_w
+    -- Draw General fields into Optionbox
+    if self.selected then
+      local bx, by = spoiler_body_top(self._sp_general)
+      local base_x = bx + row_x_pad
+      local y = by + 6
+      if self._sp_general and self._sp_general.is_open then
+        -- Name
+        local label = "Name:"
+        local label_fs = 13
+        local label_ty = y + math.floor((20 - label_fs) / 2) - 1
+        core.graphics.text_2d(label, constants.vec2.new(base_x, label_ty), label_fs, label_col(), false)
+        local lw = (core.graphics.get_text_width and core.graphics.get_text_width(label, label_fs, 0)) or 42
+        local input_x = base_x + lw + 6
+        local input_w = inner_w - lw - 26
+        if not self._props_name_input then
+          self._props_name_input = self.gui:AddInput(input_x - self.gui.x, y - self.gui.y, input_w, 20, { multiline = false, text = tostring(self.selected.name or "") }, function(_, val)
+            local ok = true
+            local v = tostring(val or "")
+            if v == "" then ok = false end
+            for i = 1, #self.components do local c2 = self.components[i]; if c2 ~= self.selected and c2.name == v then ok = false break end end
+            self._prop_name_valid = ok
+          end)
+          self._props_name_input:set_visible_if(function() return self.selected ~= nil and self._sp_general and self._sp_general.is_open end)
+        end
+        self._props_name_input.x = input_x - self.gui.x; self._props_name_input.y = y - self.gui.y; self._props_name_input.w = input_w
+        -- Rebind visibility each frame to avoid stale closures after reloads
+        if self._props_name_input.set_visible_if then
+          self._props_name_input:set_visible_if(function() return self.selected ~= nil and self._sp_general and self._sp_general.is_open end)
+        end
+        local cur_name = tostring(self.selected.name or "")
+        if self._props_name_input:get_text() ~= cur_name and not self._props_name_input.is_focused then self._props_name_input:set_text(cur_name) end
+        local name_col = self._prop_name_valid and constants.color.white(235) or constants.color.new(230, 80, 80, 255)
+        core.graphics.rect_2d(constants.vec2.new(input_x, y), input_w, 20, name_col, 1, 4)
+        y = y + 24
+        -- Title moved to component-owned Header category; no Title here
+        -- Update General spoiler height to match used space
+        do
+          local used_h = (y - by) + 6 + 20 -- body + bottom pad + header
+          local min_h = self._sp_general.h_collapsed or 24
+          local gh = math.max(min_h, used_h)
+          self._sp_general.h_expanded = gh
+          self._sp_general.h = gh
+          if self._props_ob and self._props_ob._layout_children then self._props_ob:_layout_children() end
+        end
+      end
+      -- Component-provided groups rendering
+      if self.selected.kind == "window" and self._comp_spoilers then
+        local WindowComp = require("gui/components/window")
+        local spec = WindowComp.get_properties_spec and WindowComp.get_properties_spec(self.selected)
+        if spec then
+          for gi = 1, #spec do
+            local sp = self._comp_spoilers[gi]
+            if sp and sp.is_open and sp.measure_rows then
+              sp.h_expanded = sp:measure_rows()
+              sp.h = sp.h_expanded
+            end
+          end
+          if self._props_ob and self._props_ob._layout_children then self._props_ob:_layout_children() end
+        end
+      end
+      -- Component-specific properties for ColorPicker
+      if self.selected.kind == "colorpicker" and self._comp_spoilers == nil then
+        local CP = require("gui/components/color_picker")
+        local cps = CP.get_properties_spec and CP.get_properties_spec(self.selected)
+        if cps then
+          self._comp_spoilers = {}
+          for i = 1, #cps do
+            local g = cps[i]
+            local sp = self.gui:AddSpoiler(tostring(g.title or ("Section "..i)), 20, 60)
+            if sp.set_rows then sp:set_rows(g.rows or {}, { gui = self.gui }) end
+            sp.is_open = (g.open ~= false)
+            sp.h = sp.is_open and sp.h_expanded or sp.h_collapsed
+            self._props_ob:add_child(sp)
+            table.insert(self._comp_spoilers, sp)
+          end
+          if self._props_ob and self._props_ob._layout_children then self._props_ob:_layout_children() end
+        end
+      end
+      -- Keep ColorPicker group heights fresh as rows toggle visibility
+      if self.selected.kind == "colorpicker" and self._comp_spoilers then
+        for i = 1, #self._comp_spoilers do
+          local sp = self._comp_spoilers[i]
+          if sp and sp.is_open and sp.measure_rows then
+            sp.h_expanded = sp:measure_rows()
+            sp.h = sp.h_expanded
+          end
+        end
+        if self._props_ob and self._props_ob._layout_children then self._props_ob:_layout_children() end
+      end
+      -- Global animations section removed; animations belong to component groups
+    else
+      -- Nothing selected → draw hint in Optionbox background
+      local hint = "Select an element to edit its properties"
+      local tw = (core.graphics.get_text_width and core.graphics.get_text_width(hint, 12, 0)) or 180
+      local hx = px + math.floor((col_w - tw) / 2)
+      local hy = props_y + 40
+      core.graphics.text_2d(hint, constants.vec2.new(hx, hy), 12, constants.color.white(150), false)
     end
   end
 
@@ -993,7 +1331,7 @@ function Designer:render(ox, oy)
     local cm_y = self._ctx_y
     local cm_w = 160
     local row_h = 18
-    local items = { "Edit", "Bring to front", "Duplicate", "Delete" }
+    local items = { "Delete" }
     local bg = constants.color.new(16, 20, 34, 240)
     local bd = constants.color.new(32, 40, 70, 255)
     core.graphics.rect_2d_filled(constants.vec2.new(cm_x, cm_y), cm_w, row_h * #items + 8, bg, 6)
@@ -1008,37 +1346,8 @@ function Designer:render(ox, oy)
       core.graphics.text_2d(items[i], constants.vec2.new(cm_x + 8, my - 1), constants.FONT_SIZE, constants.color.white(255), false)
       if over and constants.mouse_state.left_clicked then
         local act = items[i]
-        if act == "Edit" then
-          -- open properties popup near the cursor
-          self._edit_props_popup = true
-          self._props_x, self._props_y = cm_x + cm_w + 6, cm_y
-          self._props_just_opened = true
-          self._ctx_open = false
-        elseif act == "Resize" then
-          -- toggle resize mode; resizing works by dragging the corner handles
-          self._resize_mode = not not (not self._resize_mode)
-          self._ctx_open = false
-        elseif act == "Bring to front" then
-          -- move target to end of array
-          local t = self._ctx_target
-          for idx = 1, #self.components do
-            if self.components[idx] == t then table.remove(self.components, idx) break end
-          end
-          table.insert(self.components, t)
-          self._ctx_open = false
-        elseif act == "Duplicate" then
-          local t = self._ctx_target
-          local copy = { kind = t.kind, x = t.x + 10, y = t.y + 10, w = t.w, h = t.h, text = t.text, title = t.title }
-          table.insert(self.components, copy)
-          self.selected = copy
-          self._ctx_open = false
-        elseif act == "Delete" then
-          local t = self._ctx_target
-          for idx = #self.components, 1, -1 do
-            if self.components[idx] == t then table.remove(self.components, idx) break end
-          end
-          self.selected = nil
-          self._ctx_open = false
+        if act == "Delete" then
+          self:_remove_component(self._ctx_target)
         end
       end
       my = my + row_h

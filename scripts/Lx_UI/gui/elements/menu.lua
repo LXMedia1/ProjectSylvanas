@@ -14,6 +14,7 @@ local RadioGroup = require("gui/components/radio_group")
 local ProgressBar = require("gui/components/progress_bar")
 local Separator = require("gui/components/separator")
 local ScrollArea = require("gui/components/scroll_area")
+local OptionboxMod = require("gui/components/optionbox")
 local Treeview = require("gui/components/treeview")
 local Window = require("gui/components/window")
 local ColorPicker = require("gui/components/color_picker")
@@ -47,6 +48,20 @@ function Menu:new(name, width, height, unique_key)
     end
 
     constants.registered_guis[name] = gui
+
+    -- Simple animation config for show/hide transitions
+    gui._anim = {
+        enabled = true,
+        fade_in_ms = 220,
+        fade_out_ms = 180,
+        backdrop = false,
+        backdrop_alpha = 100,
+    }
+    gui._anim_active = false
+    gui._anim_kind = nil -- "in" or "out"
+    gui._anim_t = 0
+    gui._anim_last_ms = (core.time and core.time()) or 0
+    gui._prev_open = gui.is_open
     -- Create a menu checkbox to enable/disable drawing for this GUI
     if core.menu and core.menu.checkbox then
         local id = "lx_ui_gui_enabled_" .. (name:lower():gsub("%s+", "_"))
@@ -225,6 +240,17 @@ function Menu:AddWarning(text, x, y, duration_ms)
     self._warnings = self._warnings or {}
     table.insert(self._warnings, wl)
     return wl
+end
+
+function Menu:AddOptionbox(title, x, y, w, h)
+    local ob = OptionboxMod.Optionbox:new(self, title, x, y, w, h)
+    self._optionboxes = self._optionboxes or {}
+    table.insert(self._optionboxes, ob)
+    return ob
+end
+
+function Menu:AddSpoiler(title, h_collapsed, h_expanded)
+    return OptionboxMod.Spoiler:new(title, h_collapsed, h_expanded)
 end
 
 

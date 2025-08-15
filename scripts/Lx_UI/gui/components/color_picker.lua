@@ -15,6 +15,7 @@ function ColorPicker:new(owner_gui, x, y, w, h, color, on_change, opts)
     o.h = tonumber(h or 24) or 24
     o.on_change = on_change
     o.opts = opts or {}
+    o.style = (o.opts and o.opts.style) or "classic" -- classic | split | pill
     local c = color or { r = 255, g = 255, b = 255, a = 255 }
     local cr = tonumber(c.r); if not cr then cr = 255 end
     local cg = tonumber(c.g); if not cg then cg = 255 end
@@ -87,7 +88,17 @@ local function draw_checker(x, y, w, h)
 end
 
 function ColorPicker:render()
-    if not (self.gui and self.gui.is_open and self:is_visible()) then return end
+    -- If hidden or GUI is closed while we think we're open, force-close and clear global guard
+    if not (self.gui and self.gui.is_open and self:is_visible()) then
+        if self.is_open then
+            self.is_open = false
+            if self.gui and self.gui._active_color_picker == self then
+                self.gui._active_color_picker = nil
+            end
+            self._popup_abs = nil
+        end
+        return
+    end
     if not core.graphics then return end
 
     local gx, gy = self.gui.x + self.x, self.gui.y + self.y
@@ -95,13 +106,11 @@ function ColorPicker:render()
     local mouse = constants.mouse_state.position
     local hovered = helpers.is_point_in_rect(mouse.x, mouse.y, gx, gy, gw, gh)
 
-    -- Button background
+    -- Button background (neutral)
     local bd = constants.color.new(18,22,30,220)
-    local bg = constants.color.new(30,46,80,220)
-    local hover = constants.color.new(50,80,140,235)
-    local fill = hovered and hover or bg
+    local base_bg = hovered and constants.color.new(40,56,90,235) or constants.color.new(30,46,80,220)
     if core.graphics.rect_2d_filled then
-        core.graphics.rect_2d_filled(constants.vec2.new(gx, gy), gw, gh, fill, 6)
+        core.graphics.rect_2d_filled(constants.vec2.new(gx, gy), gw, gh, base_bg, 6)
         core.graphics.rect_2d(constants.vec2.new(gx, gy), gw, gh, bd, 1, 6)
     end
     -- Left swatch with checkerboard + color
@@ -114,24 +123,131 @@ function ColorPicker:render()
         core.graphics.rect_2d_filled(constants.vec2.new(sx, sy), sw, sw, col, 3)
         core.graphics.rect_2d(constants.vec2.new(sx, sy), sw, sw, bd, 1, 3)
     end
-    -- Text label like a button
-    if core.graphics.text_2d then
-        local label = string.format("RGBA(%d,%d,%d,%d)", self.r, self.g, self.b, self.a)
-        local fs = (constants.Theme and constants.Theme.font and constants.Theme.font.button) or constants.FONT_SIZE
+    -- Closed styles
+    local style = tostring(self.style or "classic")
+    local label = self.opts.placeholder or "Choose"
+    local fs = (constants.Theme and constants.Theme.font and constants.Theme.font.button) or constants.FONT_SIZE
+    local lum = (0.299 * self.r + 0.587 * self.g + 0.114 * self.b)
+    local txt_col_on_color = (lum > 140) and constants.color.new(20,20,24,240) or constants.color.white(245)
+    if style == "classic" then
+        -- Right preview area uses the selected color
+        local px0 = gx + sw + 8
+        local pw0 = math.max(0, gw - (sw + 12))
+        local col = constants.color.new(self.r, self.g, self.b, math.min(235, self.a or 235))
+        if core.graphics.rect_2d_filled then
+            core.graphics.rect_2d_filled(constants.vec2.new(px0, gy + 3), pw0, gh - 6, col, 4)
+            core.graphics.rect_2d(constants.vec2.new(px0, gy + 3), pw0, gh - 6, bd, 1, 4)
+        end
         local tw = (core.graphics.get_text_width and core.graphics.get_text_width(label, fs, 0)) or 0
-        local tx = gx + sw + 8 + math.max(0, math.floor((gw - (sw + 12) - tw) / 2))
+        local tx = px0 + math.max(0, math.floor((pw0 - tw) / 2))
+        local ty = gy + math.floor((gh - fs) / 2) - 1
+        core.graphics.text_2d(label, constants.vec2.new(tx, ty), fs, txt_col_on_color, false)
+    elseif style == "split" then
+        -- Left 40% color pane, right neutral with label
+        local split_w = math.max(24, math.floor(gw * 0.4))
+        local col = constants.color.new(self.r, self.g, self.b, math.min(235, self.a or 235))
+        core.graphics.rect_2d_filled(constants.vec2.new(gx + 2, gy + 2), split_w - 4, gh - 4, col, 5)
+        core.graphics.rect_2d(constants.vec2.new(gx + 2, gy + 2), split_w - 4, gh - 4, bd, 1, 5)
+        local tw = (core.graphics.get_text_width and core.graphics.get_text_width(label, fs, 0)) or 0
+        local tx = gx + split_w + math.max(6, math.floor((gw - split_w - tw) / 2))
+        local ty = gy + math.floor((gh - fs) / 2) - 1
+        core.graphics.text_2d(label, constants.vec2.new(tx, ty), fs, constants.color.white(245), false)
+        -- small divider
+        core.graphics.rect_2d_filled(constants.vec2.new(gx + split_w, gy + 4), 2, gh - 8, constants.color.new(18,22,30,180), 1)
+    elseif style == "neon" then
+        -- Neon: dark body with pulsing accent glow derived from current color
+        local accent = constants.color.new(self.r, self.g, self.b, 255)
+        local pulse = 0.5
+        if core.time then
+            local t = core.time() / 1000.0
+            pulse = 0.5 + 0.5 * math.sin(t * 3.2)
+        end
+        local glow_a = math.floor(120 + 90 * pulse)
+        local glow_col = constants.color.new(self.r, self.g, self.b, glow_a)
+        -- base body already drawn above; add neon glow outlines
+        if core.graphics.rect_2d then
+            core.graphics.rect_2d(constants.vec2.new(gx, gy), gw, gh, glow_col, 2, 8)
+            core.graphics.rect_2d(constants.vec2.new(gx + 2, gy + 2), gw - 4, gh - 4, constants.color.new(self.r, self.g, self.b, math.floor(glow_a * 0.6)), 1, 7)
+        end
+        -- left prism dot
+        local dot_d = gh - 10
+        local dx = gx + 6
+        local dy = gy + 5
+        core.graphics.rect_2d_filled(constants.vec2.new(dx, dy), dot_d, dot_d, constants.color.new(self.r, self.g, self.b, self.a), math.floor(dot_d/2))
+        core.graphics.rect_2d(constants.vec2.new(dx, dy), dot_d, dot_d, accent, 1, math.floor(dot_d/2))
+        -- label centered
+        local tw = (core.graphics.get_text_width and core.graphics.get_text_width(label, fs, 0)) or 0
+        local tx = gx + math.max(dot_d + 12, math.floor((gw - tw)/2))
+        local ty = gy + math.floor((gh - fs) / 2) - 1
+        core.graphics.text_2d(label, constants.vec2.new(tx, ty), fs, constants.color.white(250), false)
+        -- subtle bottom underline
+        core.graphics.rect_2d_filled(constants.vec2.new(gx + 8, gy + gh - 3), gw - 16, 2, glow_col, 2)
+    elseif style == "glass" then
+        -- Glassmorphism: translucent panel, soft highlight, crisp inner border
+        local glass_bg = constants.color.new(255, 255, 255, 22)
+        local glass_bd = constants.color.new(200, 220, 255, 180)
+        if core.graphics.rect_2d_filled then
+            core.graphics.rect_2d_filled(constants.vec2.new(gx + 2, gy + 2), gw - 4, gh - 4, glass_bg, 8)
+            core.graphics.rect_2d(constants.vec2.new(gx + 2, gy + 2), gw - 4, gh - 4, glass_bd, 1, 8)
+        end
+        -- top glossy strip
+        local gloss_h = math.max(2, math.floor(gh * 0.35))
+        core.graphics.rect_2d_filled(constants.vec2.new(gx + 4, gy + 3), gw - 8, gloss_h, constants.color.new(255,255,255,26), 6)
+        -- left rounded color capsule
+        local cap_w = gh - 6
+        local cx = gx + 5
+        local cy = gy + 3
+        draw_checker(cx, cy, cap_w, cap_w)
+        core.graphics.rect_2d_filled(constants.vec2.new(cx, cy), cap_w, cap_w, constants.color.new(self.r, self.g, self.b, self.a), math.floor(cap_w/2))
+        core.graphics.rect_2d(constants.vec2.new(cx, cy), cap_w, cap_w, constants.color.new(18,22,30,160), 1, math.floor(cap_w/2))
+        -- label centered left-biased
+        local tw = (core.graphics.get_text_width and core.graphics.get_text_width(label, fs, 0)) or 0
+        local tx = gx + math.max(cap_w + 10, math.floor((gw - tw)/2))
         local ty = gy + math.floor((gh - fs) / 2) - 1
         core.graphics.text_2d(label, constants.vec2.new(tx, ty), fs, constants.color.white(240), false)
+    else -- pill
+        -- Centered label with a colored dot at left
+        local dot_d = gh - 8
+        local dx = gx + 6
+        local dy = gy + 4
+        core.graphics.rect_2d_filled(constants.vec2.new(dx, dy), dot_d, dot_d, constants.color.new(self.r, self.g, self.b, self.a), math.floor(dot_d/2))
+        core.graphics.rect_2d(constants.vec2.new(dx, dy), dot_d, dot_d, bd, 1, math.floor(dot_d/2))
+        local tw = (core.graphics.get_text_width and core.graphics.get_text_width(label, fs, 0)) or 0
+        local tx = gx + math.max(dot_d + 10, math.floor((gw - tw)/2))
+        local ty = gy + math.floor((gh - fs) / 2) - 1
+        core.graphics.text_2d(label, constants.vec2.new(tx, ty), fs, constants.color.white(245), false)
     end
 
-    if hovered and constants.mouse_state.left_clicked then self._pressed_in = true end
+    -- Toggle logic with global guard: only one color picker may be open per GUI
+    local active = self.gui and self.gui._active_color_picker
+    if hovered and constants.mouse_state.left_clicked then
+        if (not active) or (active == self) then
+            self._pressed_in = true
+        end
+    end
     if self._pressed_in and not constants.mouse_state.left_down then
         self._pressed_in = false
-        if hovered then self.is_open = not self.is_open end
+        if hovered then
+            if (not active) or (active == self) then
+                self.is_open = not self.is_open
+                -- Maintain global guard on toggle edge
+                if self.is_open then
+                    if self.gui then self.gui._active_color_picker = self end
+                else
+                    if self.gui and self.gui._active_color_picker == self then self.gui._active_color_picker = nil end
+                    self._popup_abs = nil
+                end
+            end
+        end
     end
 
     -- Popup
-    if not self.is_open then self._popup_abs = nil; return end
+    if not self.is_open then
+        if self.gui and self.gui._active_color_picker == self then self.gui._active_color_picker = nil end
+        self._popup_abs = nil
+        return
+    end
+    if self.gui then self.gui._active_color_picker = self end
     local px = gx
     local py = gy + gh + 4
     local pw = math.max(240, gw)
@@ -155,8 +271,29 @@ function ColorPicker:render()
         core.graphics.rect_2d_filled(constants.vec2.new(px, py), pw, ph, col_panel, 6)
         core.graphics.rect_2d(constants.vec2.new(px, py), pw, ph, col_border, 1, 6)
     end
-    -- Block game clicks under popup
-    if constants.hot_zones then table.insert(constants.hot_zones, { x = px, y = py, w = pw, h = ph }) end
+    -- Advanced popup accents
+    if style == "neon" then
+        local pulse = 0.5
+        if core.time then
+            local t = core.time() / 1000.0
+            pulse = 0.5 + 0.5 * math.sin(t * 3.2)
+        end
+        local a = math.floor(120 + 100 * pulse)
+        local glow = constants.color.new(self.r, self.g, self.b, a)
+        if core.graphics.rect_2d then
+            core.graphics.rect_2d(constants.vec2.new(px - 1, py - 1), pw + 2, ph + 2, glow, 2, 8)
+            core.graphics.rect_2d(constants.vec2.new(px + 1, py + 1), pw - 2, ph - 2, constants.color.new(self.r, self.g, self.b, math.floor(a * 0.6)), 1, 6)
+        end
+    elseif style == "glass" then
+        -- soft inner highlight band under header of popup
+        local band_h = 22
+        core.graphics.rect_2d_filled(constants.vec2.new(px + 6, py + 6), pw - 12, band_h, constants.color.new(255,255,255,20), 6)
+    end
+    -- Block clicks while popup open: add a full-GUI hot zone and the popup zone
+    if constants.hot_zones then
+        table.insert(constants.hot_zones, { x = self.gui.x, y = self.gui.y, w = self.gui.width, h = self.gui.height })
+        table.insert(constants.hot_zones, { x = px, y = py, w = pw, h = ph })
+    end
     -- Expose popup rect (absolute) for other UIs (e.g., Designer) to ignore input when interacting with the picker
     self._popup_abs = { x = px, y = py, w = pw, h = ph }
 
@@ -294,9 +431,14 @@ function ColorPicker:render()
     local VK_ESCAPE = 0x1B
     if (core.input and core.input.is_key_pressed and (core.input.is_key_pressed(VK_RETURN) or core.input.is_key_pressed(VK_ESCAPE))) then
         self.is_open = false
+        if self.gui and self.gui._active_color_picker == self then self.gui._active_color_picker = nil end
+        self._popup_abs = nil
     end
     if constants.mouse_state.left_clicked and not helpers.is_point_in_rect(mouse.x, mouse.y, px, py, pw, ph) and not hovered then
+        -- Close on outside click; also clear global active so the same click doesn't open another picker this frame
         self.is_open = false
+        if self.gui and self.gui._active_color_picker == self then self.gui._active_color_picker = nil end
+        self._popup_abs = nil
     end
 end
 
@@ -342,6 +484,43 @@ function ColorPicker:_rgb_to_sv(r, g, b)
     return s, v
 end
 
-return ColorPicker
+-- Designer integration: properties spec for the ColorPicker component
+function ColorPicker.get_properties_spec(comp)
+    -- defaults used by the designer component
+    comp.w = comp.w or 160
+    comp.h = comp.h or 22
+    comp.placeholder = comp.placeholder or "Choose"
+    comp.style = comp.style or "classic"
+    comp.default_color = comp.default_color or { r = 240, g = 240, b = 245, a = 255 }
+    comp.value = comp.value or { r = comp.default_color.r, g = comp.default_color.g, b = comp.default_color.b, a = comp.default_color.a }
+    return {
+        { type = "spoiler", title = "General", open = true, rows = {
+            { type = "number2", label = "Size (W/H)", get = function() return comp.w or 0, comp.h or 0 end,
+              set = function(w, h) if w and w > 20 then comp.w = math.floor(w) end if h and h > 16 then comp.h = math.floor(h) end end },
+        }},
+        { type = "spoiler", title = "Options", open = true, rows = {
+            { type = "color", label = "Default Color", get = function() return comp.default_color end,
+              set = function(c) comp.default_color = { r=c.r,g=c.g,b=c.b,a=c.a }; if not comp.value then comp.value = { r=c.r,g=c.g,b=c.b,a=c.a } end end },
+            { type = "text", label = "Placeholder", get = function() return tostring(comp.placeholder or "") end,
+              set = function(v) comp.placeholder = tostring(v or "") end },
+              { type = "combo", label = "Style", items = {"Classic","Split","Pill","Neon","Glass"},
+              get_index = function()
+                return (comp.style == "split" and 2)
+                    or (comp.style == "pill" and 3)
+                    or (comp.style == "neon" and 4)
+                    or (comp.style == "glass" and 5)
+                    or 1
+              end,
+              set_index = function(i)
+                comp.style = (i == 2 and "split")
+                    or (i == 3 and "pill")
+                    or (i == 4 and "neon")
+                    or (i == 5 and "glass")
+                    or "classic"
+              end },
+        }},
+    }
+end
 
+return ColorPicker
 
