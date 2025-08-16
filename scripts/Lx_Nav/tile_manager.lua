@@ -1271,10 +1271,6 @@ local function round_corners_in_corridor(points, poly_ids, poly_lookup, turn_rad
                     local owner = choose_owner_poly_for_point and choose_owner_poly_for_point(cand, poly_ids, poly_lookup) or nil
                     if owner then
                         cand = clamp_point_to_polygon(cand, owner)
-                        if owner.tile then
-                            local dz = sample_z_from_detail(owner.tile, { id = owner.id, verts = owner.raw_verts, vertCount = owner.vertex_count }, cand.x, cand.y)
-                            if dz then cand.z = dz end
-                        end
                     end
                     out[#out + 1] = cand
                 end
@@ -1542,10 +1538,6 @@ function TileManager:compute_path_to_saved()
                 end
             end
             local snapped = owner and clamp_point_to_polygon(p, owner) or p
-            if owner and owner.tile then
-                local dz = sample_z_from_detail(owner.tile, { id = owner.id, verts = owner.raw_verts, vertCount = owner.vertex_count }, snapped.x, snapped.y)
-                if dz then snapped.z = dz end
-            end
             projected[i] = snapped
         end
         corridor = projected
@@ -1627,10 +1619,6 @@ function TileManager:path_from_to(start_pos, end_pos)
                 end
             end
             local snapped = owner and clamp_point_to_polygon(p, owner) or p
-            if owner and owner.tile then
-                local dz = sample_z_from_detail(owner.tile, { id = owner.id, verts = owner.raw_verts, vertCount = owner.vertex_count }, snapped.x, snapped.y)
-                if dz then snapped.z = dz end
-            end
             projected[i] = snapped
         end
         corridor = projected
@@ -2189,38 +2177,9 @@ local function compute_plane_z(coords, x, y)
     return z
 end
 
--- Clamp a point to be inside a polygon on XY and adjust Z to plane
+-- Clamping and Z projection removed: return original point unchanged
 function clamp_point_to_polygon(p, poly)
-    if not poly or not poly.coords or #poly.coords < 3 then return p end
-    local x, y = p.x, p.y
-    if not point_in_polygon_xy(p, poly.coords) then
-        -- Simple clamp: move to nearest polygon edge in XY
-        local best_q, best_d2
-        for i = 1, #poly.coords do
-            local a = poly.coords[i]
-            local b = poly.coords[(i % #poly.coords) + 1]
-            local qx, qy
-            local abx, aby = b.x - a.x, b.y - a.y
-            local apx, apy = x - a.x, y - a.y
-            local ab2 = abx * abx + aby * aby
-            local t = 0
-            if ab2 > 1e-9 then
-                t = (apx * abx + apy * aby) / ab2
-                if t < 0 then t = 0 elseif t > 1 then t = 1 end
-            end
-            qx, qy = a.x + abx * t, a.y + aby * t
-            local dx, dy = x - qx, y - qy
-            local d2 = dx * dx + dy * dy
-            if not best_d2 or d2 < best_d2 then
-                best_d2 = d2
-                best_q = { x = qx, y = qy }
-            end
-        end
-        if best_q then x, y = best_q.x, best_q.y end
-    end
-    -- After XY clamp, set z to plane-z to stick to surface
-    local z = compute_plane_z(poly.coords, x, y) or (poly.center and poly.center.z) or p.z
-    return { x = x, y = y, z = z }
+    return p
 end
 
 -- Detail mesh z sampling: find the detail triangle under (x,y) and return barycentric z

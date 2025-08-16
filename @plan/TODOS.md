@@ -39,4 +39,6 @@ Notes
   - Document double-click-to-edit behavior: double-click selects full text for quick overwrite.
   - Note: In inline edit, double-click inside input also selects all; ESC exits edit mode to allow moving components.
 
+  - Lx_Nav: Update docs to reflect removal of XY clamping and Z projection along path. Paths now preserve computed XY and Z as produced by the algorithm without post-adjustment.
+
 
