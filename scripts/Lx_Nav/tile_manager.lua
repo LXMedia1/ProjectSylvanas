@@ -224,13 +224,7 @@ function TileManager:start()
         local now_ms = core.time() or 0
         local force_draw = self.path_draw_until_ms and now_ms < self.path_draw_until_ms
         if self.show_path or force_draw then
-            if self.draw_corridor_layers_only then
-                self:draw_path_corridor_layers()
-            else
-                self:draw_path()
-                -- Also draw all polygons that form the current path corridor
-                self:draw_path_polygons()
-            end
+            self:draw_path()
         end
         -- Gated debug/mesh visualization
         if not self.allow_visualization then return end
@@ -2259,64 +2253,7 @@ end
 -- - Dark transparent green for the path polygons
 -- - Normal transparent green for their immediate neighbors
 -- - Very transparent green for neighbors of those
-function TileManager:draw_path_corridor_layers()
-    if not self.path_poly_ids or not self.poly_lookup then return end
-    if self.path_graph_id and self.path_graph_id ~= self.graph_build_id then return end
-    local color = require('common/color')
-    local vec3 = require('common/geometry/vector_3')
-
-    local function fill(poly, col, zoff)
-        if not poly or not poly.coords or #poly.coords < 3 then return end
-        local base = poly.coords[1]
-        for i = 2, #poly.coords - 1 do
-            local p1 = vec3.new(base.x, base.y, base.z + zoff)
-            local p2 = vec3.new(poly.coords[i].x, poly.coords[i].y, poly.coords[i].z + zoff)
-            local p3 = vec3.new(poly.coords[i+1].x, poly.coords[i+1].y, poly.coords[i+1].z + zoff)
-            core.graphics.triangle_3d_filled(p1, p2, p3, col)
-        end
-    end
-
-    -- Collect adjacency from built graph
-    local adj = self.graph.edges or {}
-
-    -- Build sets for layers
-    local layer0 = {}
-    local layer1 = {}
-    local layer2 = {}
-    local in_l0 = {}
-    local in_l1 = {}
-
-    for _, pid in ipairs(self.path_poly_ids) do
-        layer0[#layer0 + 1] = pid
-        in_l0[pid] = true
-    end
-    for _, pid in ipairs(layer0) do
-        for _, nb in ipairs(adj[pid] or {}) do
-            if not in_l0[nb] and not in_l1[nb] then
-                layer1[#layer1 + 1] = nb
-                in_l1[nb] = true
-            end
-        end
-    end
-    local in_l2 = {}
-    for _, pid in ipairs(layer1) do
-        for _, nb in ipairs(adj[pid] or {}) do
-            if not in_l0[nb] and not in_l1[nb] and not in_l2[nb] then
-                layer2[#layer2 + 1] = nb
-                in_l2[nb] = true
-            end
-        end
-    end
-
-    -- Colors
-    local c0 = color.new(30, 160, 60, 160)  -- dark transparent green
-    local c1 = color.new(30, 200, 80, 100)  -- normal transparent green
-    local c2 = color.new(30, 220, 100, 50)  -- very transparent green
-
-    for _, pid in ipairs(layer0) do fill(self.poly_lookup[pid], c0, 0.015) end
-    for _, pid in ipairs(layer1) do fill(self.poly_lookup[pid], c1, 0.010) end
-    for _, pid in ipairs(layer2) do fill(self.poly_lookup[pid], c2, 0.005) end
-end
+-- draw_path_corridor_layers removed (only the real path is drawn now)
 
 -- Utility: squared distance from point C to segment AB (ignore z for stability)
 local function dist2_point_to_segment_xy(a, b, c)
@@ -2450,7 +2387,6 @@ function TileManager:render_menu()
         
         self.cb_draw_mesh = core.menu.checkbox(false, "lx_nav_draw_mesh")
         self.cb_draw_path_polys = core.menu.checkbox(false, "lx_nav_draw_path_polys")
-        self.cb_draw_corridor_layers = core.menu.checkbox(false, "lx_nav_draw_corridor_layers_only")
         self.menu_inited = true
     end
 
@@ -2460,8 +2396,6 @@ function TileManager:render_menu()
         self.draw_navmesh_enabled = self.cb_draw_mesh:get_state()
         self.cb_draw_path_polys:render("Draw path polys")
         self.draw_path_polygons_enabled = self.cb_draw_path_polys:get_state()
-        self.cb_draw_corridor_layers:render("Corridor layers (no path)")
-        self.draw_corridor_layers_only = self.cb_draw_corridor_layers:get_state()
 
         -- Save position button
         self.btn_save:render("Save position")
@@ -2536,44 +2470,7 @@ function TileManager:draw_path()
             core.graphics.line_3d(vec3.new(pos.x, pos.y, pos.z), vec3.new(best.x, best.y, best.z), color2, 4.0)
         end
     end
-    -- Also highlight the two neighboring polygons around the player's nearest path polygon
-    if self.path_poly_ids and self.poly_lookup then
-        local best_idx, best_d2 = nil, 1e30
-        for i, pid in ipairs(self.path_poly_ids) do
-            local poly = self.poly_lookup[pid]
-            if poly and poly.center then
-                local cx, cy, cz = poly.center.x, poly.center.y, poly.center.z
-                local dx, dy, dz = cx - pos.x, cy - pos.y, cz - pos.z
-                local d2 = dx * dx + dy * dy + dz * dz
-                if d2 < best_d2 then best_d2 = d2; best_idx = i end
-            end
-        end
-        local function draw_one_poly(poly, edge_c, fill_c, zoff)
-            if not poly or not poly.coords or #poly.coords < 3 then return end
-            local base = poly.coords[1]
-            for i = 2, #poly.coords - 1 do
-                local p1 = vec3.new(base.x, base.y, base.z + zoff)
-                local p2 = vec3.new(poly.coords[i].x, poly.coords[i].y, poly.coords[i].z + zoff)
-                local p3 = vec3.new(poly.coords[i+1].x, poly.coords[i+1].y, poly.coords[i+1].z + zoff)
-                core.graphics.triangle_3d_filled(p1, p2, p3, fill_c)
-            end
-            for i = 1, #poly.coords do
-                local a = poly.coords[i]
-                local b = poly.coords[(i % #poly.coords) + 1]
-                core.graphics.line_3d(vec3.new(a.x, a.y, a.z + zoff + 0.005), vec3.new(b.x, b.y, b.z + zoff + 0.005), edge_c, 2.0)
-            end
-        end
-        if best_idx then
-            local n_edge = color.new(80, 255, 160, 200)
-            local n_fill = color.new(50, 255, 160, 50)
-            if best_idx > 1 then
-                draw_one_poly(self.poly_lookup[self.path_poly_ids[best_idx - 1]], n_edge, n_fill, 0.01)
-            end
-            if best_idx < #self.path_poly_ids then
-                draw_one_poly(self.poly_lookup[self.path_poly_ids[best_idx + 1]], n_edge, n_fill, 0.01)
-            end
-        end
-    end
+    -- Removed polygon highlighting next to player to only draw the real path
 end
 function TileManager:draw_debug_tile_boundaries()
     if not self.current_tile or not self.debug_enabled then
