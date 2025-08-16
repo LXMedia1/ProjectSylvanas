@@ -1671,6 +1671,8 @@ function TileManager:compute_path_to_saved()
     self.path_nodes = corridor
     self.path_poly_ids = poly_ids
     dlog(self, "Path with " .. #self.path_nodes .. " nodes ready")
+    -- Ensure path is visible without starting movement
+    self.show_path = true
 end
 
 -- Build path between two positions without modifying movement state
@@ -2101,7 +2103,7 @@ function TileManager:draw_path_polygons()
     local vec3 = require('common/geometry/vector_3')
     local edge_col = color.new(80, 200, 255, 220)
     local fill_col = color.new(50, 120, 255, 60)
-    for _, pid in ipairs(self.path_poly_ids) do
+    for idx, pid in ipairs(self.path_poly_ids) do
         local poly = self.poly_lookup[pid]
         if poly and poly.coords and #poly.coords >= 3 then
             -- Triangle fan for a light fill
@@ -2117,6 +2119,30 @@ function TileManager:draw_path_polygons()
                 local a = poly.coords[i]
                 local b = poly.coords[(i % #poly.coords) + 1]
                 core.graphics.line_3d(vec3.new(a.x, a.y, a.z + 0.03), vec3.new(b.x, b.y, b.z + 0.03), edge_col, 2.0)
+            end
+
+            -- Draw neighboring polygons (prev and next) subtly to give corridor context
+            local neighbor_ids = {}
+            if idx > 1 then neighbor_ids[#neighbor_ids + 1] = self.path_poly_ids[idx - 1] end
+            if idx < #self.path_poly_ids then neighbor_ids[#neighbor_ids + 1] = self.path_poly_ids[idx + 1] end
+            local n_edge = color.new(80, 255, 160, 180)
+            local n_fill = color.new(50, 255, 160, 40)
+            for _, nid in ipairs(neighbor_ids) do
+                local np = self.poly_lookup[nid]
+                if np and np.coords and #np.coords >= 3 then
+                    local b0 = np.coords[1]
+                    for i = 2, #np.coords - 1 do
+                        local p1 = vec3.new(b0.x, b0.y, b0.z + 0.01)
+                        local p2 = vec3.new(np.coords[i].x, np.coords[i].y, np.coords[i].z + 0.01)
+                        local p3 = vec3.new(np.coords[i+1].x, np.coords[i+1].y, np.coords[i+1].z + 0.01)
+                        core.graphics.triangle_3d_filled(p1, p2, p3, n_fill)
+                    end
+                    for i = 1, #np.coords do
+                        local a2 = np.coords[i]
+                        local b2 = np.coords[(i % #np.coords) + 1]
+                        core.graphics.line_3d(vec3.new(a2.x, a2.y, a2.z + 0.02), vec3.new(b2.x, b2.y, b2.z + 0.02), n_edge, 1.5)
+                    end
+                end
             end
         end
     end
