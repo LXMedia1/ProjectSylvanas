@@ -5,7 +5,6 @@
 local function toGameCoordinates(nx, ny, nz)
     return nz, nx, ny
 end
-
 -- Debug logging helper
 local function dlog(self, msg)
     if self and self.debuglog_enabled then core.log(msg) end
@@ -26,93 +25,7 @@ end
 
 -- Legacy raw parsing helpers removed (parsing now handled in mmap_decode.lua)
 
--- Extract polygons from raw tile data
-local function extract_polygons_from_tile(tile_data)
-    local polygons = {}
-
-    if not tile_data or not tile_data.polys or tile_data.polyCount == 0 then
-        return polygons
-    end
-
-    -- Use structured fields from mmap_decode
-    local polys = tile_data.polys or {}
-    local links = tile_data.links or {}
-
-    -- Build a map from vertex index to world position for computing edge midpoints
-    local function base_vert_world(idx)
-        local pos = (idx - 1) * 3 + 1
-        if pos + 2 > #tile_data.vertices then return nil end
-        local mx, my, mz = tile_data.vertices[pos], tile_data.vertices[pos + 1], tile_data.vertices[pos + 2]
-        local gx, gy, gz = toGameCoordinates(mx, my, mz)
-        return { x = gx, y = gy, z = gz }
-    end
-
-    -- Pre-collect links per polygon edge: ref encodes neighbor polygon index; bmin/bmax give sub-edge range
-    local links_by_poly = {}
-    for _, l in ipairs(links) do
-        -- dir is edge index (0..5), side indicates external tile side
-        local poly_id = l.ref -- In mmaps this is a poly ref; in single-tile use as neighbor id fallback
-        -- We'll attach by iterating all polys and storing link ranges on their edges
-        if l.dir and l.dir >= 0 and l.dir <= 5 then
-            links_by_poly[l.dir] = links_by_poly[l.dir] or {}
-        end
-    end
-
-    for _, poly in ipairs(polys) do
-        -- Filter to ground polys only: type is stored in the top 2 bits (area low 6 bits)
-        local poly_type = math.floor(poly.areaAndtype / 64) % 4
-        if poly_type == 0 then
-            local vertices = {}
-            local coords = {}
-            local center = { x = 0, y = 0, z = 0 }
-            local valid_vertices = 0
-
-            -- Only first vertCount indices are valid
-            for j = 1, poly.vertCount do
-                local vertex_index = poly.verts[j] or 0
-                local one_based_vertex_idx = vertex_index + 1
-                if one_based_vertex_idx >= 1 and one_based_vertex_idx <= tile_data.vertCount then
-                    table.insert(vertices, one_based_vertex_idx)
-
-                    local vertex_pos = (one_based_vertex_idx - 1) * 3 + 1
-                    if vertex_pos + 2 <= #tile_data.vertices then
-                        local mesh_x = tile_data.vertices[vertex_pos]
-                        local mesh_y = tile_data.vertices[vertex_pos + 1]
-                        local mesh_z = tile_data.vertices[vertex_pos + 2]
-                        local gx, gy, gz = toGameCoordinates(mesh_x, mesh_y, mesh_z)
-                        table.insert(coords, { x = gx, y = gy, z = gz })
-                        center.x = center.x + gx
-                        center.y = center.y + gy
-                        center.z = center.z + gz
-                        valid_vertices = valid_vertices + 1
-                    end
-                end
-            end
-
-            if valid_vertices >= 3 and #vertices >= 3 then
-                center.x = center.x / valid_vertices
-                center.y = center.y / valid_vertices
-                center.z = center.z / valid_vertices
-
-                table.insert(polygons, {
-                    id = poly.id,
-                    center = center,
-                    vertices = vertices,
-                    coords = coords,
-                    vertex_count = #vertices,
-                    flags = poly.flags,
-                    areaAndtype = poly.areaAndtype,
-                    neis = poly.neis,
-                    tile = tile_data,
-                    -- Keep raw vertex indices to compute sub-edge midpoints if future link data is used
-                    raw_verts = poly.verts
-                })
-            end
-        end
-    end
-
-    return polygons
-end
+-- Extract polygons moved to MMap.extract_polygons
 
 local mesh_helper = require('mesh_helper')
 
@@ -180,6 +93,7 @@ function TileManager:new()
         path_nodes = nil,              -- Array of vec3 along computed path
         loaded_tiles = {},             -- map "x:y" -> true
         tiles = {},                    -- map "x:y" -> { tile_data = ..., polygons = ... }
+        tile_parse_cache = {},         -- filename -> parsed tile_data (or false if missing)
         all_polygons = {},             -- merged polygons across loaded tiles
         poly_lookup = {},              -- nodeId -> polygon for path rendering
         graph = { nodes = {}, edges = {} }, -- nodes: {id, center, v1,v2,v3}; edges: id -> {neighbor_ids}
@@ -243,6 +157,11 @@ function TileManager:new()
     setmetatable(obj, self)
     self.__index = self
     return obj
+end
+
+-- Disable drawing of alternative paths and provide a cleanup helper
+function TileManager:clear_alt_paths()
+    self.alt_paths_nodes = nil
 end
 
 function TileManager:format_tile_filename(continent_id, tile_x, tile_y)
@@ -393,29 +312,16 @@ function TileManager:ensure_neighbor_tiles_loaded(cx, cy, radius, budget_ms_over
     local center_key = tostring(cx) .. ":" .. tostring(cy)
     if not self.loaded_tiles[center_key] then
         local filename = self:format_tile_filename(continent_id, cx, cy)
-        local t_read0 = core.cpu_ticks and core.cpu_ticks() or 0
-        local raw = core.read_data_file(filename)
-        local t_read1 = core.cpu_ticks and core.cpu_ticks() or 0
-        local read_ms = ticks_to_ms((t_read1 or 0) - (t_read0 or 0))
-        if raw and #raw > 0 then
-            local t_parse0 = core.cpu_ticks and core.cpu_ticks() or 0
-            local parsed, perr = MMap.parse_tile(raw)
-            local t_parse1 = core.cpu_ticks and core.cpu_ticks() or 0
-            local parse_ms = ticks_to_ms((t_parse1 or 0) - (t_parse0 or 0))
-            if parsed then
-                local t_extract0 = core.cpu_ticks and core.cpu_ticks() or 0
-                local polys = extract_polygons_from_tile(parsed)
-                local t_extract1 = core.cpu_ticks and core.cpu_ticks() or 0
-                local extract_ms = ticks_to_ms((t_extract1 or 0) - (t_extract0 or 0))
-                self.tiles[center_key] = { tile_data = parsed, polygons = polys }
-                self.loaded_tiles[center_key] = true
-                any_loaded = true
-                if self.profile_enabled and (self.profile_log_each_tile or read_ms > self.profile_threshold_ms or parse_ms > self.profile_threshold_ms or extract_ms > self.profile_threshold_ms) then
-                    core.log(string.format("[Perf] tile %s read=%.2fms parse=%.2fms extract=%.2fms verts=%d polys=%d", filename, read_ms, parse_ms, extract_ms, parsed.vertCount or -1, (polys and #polys or 0)))
-                end
-            else
-                core.log_warning("Failed to parse tile: " .. filename .. " reason=" .. tostring(perr))
+        local parsed, polys, timings = MMap.get_tile_with_polygons(filename, toGameCoordinates, "xform-game")
+        if parsed and polys then
+            self.tiles[center_key] = { tile_data = parsed, polygons = polys }
+            self.loaded_tiles[center_key] = true
+            any_loaded = true
+            if self.profile_enabled and (self.profile_log_each_tile or (timings.read_ms or 0) > self.profile_threshold_ms or (timings.parse_ms or 0) > self.profile_threshold_ms or (timings.extract_ms or 0) > self.profile_threshold_ms) then
+                core.log(string.format("[Perf] tile %s read=%.2fms parse=%.2fms extract=%.2fms verts=%d polys=%d", filename, timings.read_ms or 0, timings.parse_ms or 0, timings.extract_ms or 0, parsed.vertCount or -1, (polys and #polys or 0)))
             end
+        else
+            core.log_warning("Failed to load tile or polygons: " .. filename)
         end
     end
     for dx = -r, r do
@@ -433,29 +339,14 @@ function TileManager:ensure_neighbor_tiles_loaded(cx, cy, radius, budget_ms_over
                 if not self.loaded_tiles[key] then
                     local filename = self:format_tile_filename(continent_id, tx, ty)
                     dlog(self, string.format("[Nav] Loading tile %d:%d -> %s", tx, ty, filename))
-                    local t_read0 = core.cpu_ticks and core.cpu_ticks() or 0
-                    local raw = core.read_data_file(filename)
-                    local t_read1 = core.cpu_ticks and core.cpu_ticks() or 0
-                    local read_ms = ticks_to_ms((t_read1 or 0) - (t_read0 or 0))
-                    if raw and #raw > 0 then
-                        local t_parse0 = core.cpu_ticks and core.cpu_ticks() or 0
-                        local parsed, perr = MMap.parse_tile(raw)
-                        local t_parse1 = core.cpu_ticks and core.cpu_ticks() or 0
-                        local parse_ms = ticks_to_ms((t_parse1 or 0) - (t_parse0 or 0))
-                        if parsed then
-                            local t_extract0 = core.cpu_ticks and core.cpu_ticks() or 0
-                            local polys = extract_polygons_from_tile(parsed)
-                            local t_extract1 = core.cpu_ticks and core.cpu_ticks() or 0
-                            local extract_ms = ticks_to_ms((t_extract1 or 0) - (t_extract0 or 0))
-                            self.tiles[key] = { tile_data = parsed, polygons = polys }
-                            self.loaded_tiles[key] = true
-                            any_loaded = true
-                            dlog(self, string.format("[Nav] Loaded %s verts=%d polys=%d (read=%.2fms parse=%.2fms extract=%.2fms)", filename, parsed.vertCount or -1, (polys and #polys or 0), read_ms, parse_ms, extract_ms))
-                            if self.profile_enabled and (self.profile_log_each_tile or read_ms > self.profile_threshold_ms or parse_ms > self.profile_threshold_ms or extract_ms > self.profile_threshold_ms) then
-                                core.log(string.format("[Perf] tile %s read=%.2fms parse=%.2fms extract=%.2fms verts=%d polys=%d", filename, read_ms, parse_ms, extract_ms, parsed.vertCount or -1, (polys and #polys or 0)))
-                            end
-                        else
-                            core.log_warning("Failed to parse tile: " .. filename .. " reason=" .. tostring(perr))
+                    local parsed2, polys2, timings2 = MMap.get_tile_with_polygons(filename, toGameCoordinates, "xform-game")
+                    if parsed2 and polys2 then
+                        self.tiles[key] = { tile_data = parsed2, polygons = polys2 }
+                        self.loaded_tiles[key] = true
+                        any_loaded = true
+                        dlog(self, string.format("[Nav] Loaded %s verts=%d polys=%d (read=%.2fms parse=%.2fms extract=%.2fms)", filename, parsed2.vertCount or -1, (polys2 and #polys2 or 0), timings2.read_ms or 0, timings2.parse_ms or 0, timings2.extract_ms or 0))
+                        if self.profile_enabled and (self.profile_log_each_tile or (timings2.read_ms or 0) > self.profile_threshold_ms or (timings2.parse_ms or 0) > self.profile_threshold_ms or (timings2.extract_ms or 0) > self.profile_threshold_ms) then
+                            core.log(string.format("[Perf] tile %s read=%.2fms parse=%.2fms extract=%.2fms verts=%d polys=%d", filename, timings2.read_ms or 0, timings2.parse_ms or 0, timings2.extract_ms or 0, parsed2.vertCount or -1, (polys2 and #polys2 or 0)))
                         end
                     else
                         if self.debuglog_enabled then
@@ -1544,6 +1435,7 @@ function TileManager:compute_path_to_saved()
         if self.round_corners_enabled and self.strict_detour_mode then
             corridor = round_corners_in_corridor(corridor, ids, self.poly_lookup, self.min_turn_radius, self.round_steps)
         end
+        -- Keep for potential inspection, but we won't draw these anymore
         alt_nodes[#alt_nodes + 1] = corridor
         -- Score by actual path distance (prefer shortest physical distance)
         local dist = path_total_length(corridor)
@@ -2610,21 +2502,6 @@ function TileManager:draw_path()
     local color = require('common/color')
     local vec3 = require('common/geometry/vector_3')
     local path_col = color.new(50, 150, 255, 255)
-    -- Draw alternative paths (if any)
-    if self.alt_paths_nodes and #self.alt_paths_nodes > 0 then
-        for i = 1, math.min(10, #self.alt_paths_nodes) do
-            local nodes = self.alt_paths_nodes[i]
-            if nodes and #nodes >= 2 then
-                -- Vary color/alpha per alternative to make them visible
-                local hue = (i * 23) % 255
-                local a = math.max(80, 200 - i * 10)
-                local col = color.new(60 + hue, 140 + ((i*13)%60), 255, a)
-                for j = 1, #nodes - 1 do
-                    core.graphics.line_3d(vec3.new(nodes[j].x, nodes[j].y, nodes[j].z + 0.01), vec3.new(nodes[j+1].x, nodes[j+1].y, nodes[j+1].z + 0.01), col, 2.5)
-                end
-            end
-        end
-    end
     for i = 1, #self.path_nodes - 1 do
         local p1 = self.path_nodes[i]
         local p2 = self.path_nodes[i + 1]

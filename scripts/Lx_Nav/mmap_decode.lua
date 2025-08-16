@@ -1,4 +1,6 @@
 local MMap = {}
+local parsed_tile_cache = {}
+local polygons_cache_by_transform = {}
 
 function MMap.new(orig_x, orig_y, orig_z, tile_width, tile_height, max_tiles, max_polys)
     local self = {}
@@ -403,6 +405,115 @@ function MMap.load()
         return nil
     end
     return mmap
+end
+
+-- Extract polygons and centers from parsed tile into game-space coordinates.
+-- Accepts an optional toGameCoordinatesFn(nx, ny, nz) -> (gx, gy, gz).
+function MMap.extract_polygons(tile_data, toGameCoordinatesFn)
+    local polygons = {}
+    if not tile_data or not tile_data.polys or tile_data.polyCount == 0 then
+        return polygons
+    end
+    local toGame = toGameCoordinatesFn or function(nx, ny, nz) return nx, ny, nz end
+    local verts = tile_data.vertices or {}
+    local vertCount = tile_data.vertCount or 0
+    for _, poly in ipairs(tile_data.polys or {}) do
+        local poly_type = math.floor((poly.areaAndtype or 0) / 64) % 4
+        if poly_type == 0 then
+            local coords = {}
+            local center = { x = 0, y = 0, z = 0 }
+            local used = 0
+            for j = 1, (poly.vertCount or 0) do
+                local vertex_index = (poly.verts and poly.verts[j]) or 0
+                local one_based = vertex_index + 1
+                if one_based >= 1 and one_based <= vertCount then
+                    local pos = (one_based - 1) * 3 + 1
+                    if pos + 2 <= #verts then
+                        local mx, my, mz = verts[pos], verts[pos + 1], verts[pos + 2]
+                        local gx, gy, gz = toGame(mx, my, mz)
+                        coords[#coords + 1] = { x = gx, y = gy, z = gz }
+                        center.x = center.x + gx
+                        center.y = center.y + gy
+                        center.z = center.z + gz
+                        used = used + 1
+                    end
+                end
+            end
+            if used >= 3 and #coords >= 3 then
+                center.x = center.x / used
+                center.y = center.y / used
+                center.z = center.z / used
+                polygons[#polygons + 1] = {
+                    id = poly.id,
+                    center = center,
+                    vertices = {}, -- optional; not needed by consumers
+                    coords = coords,
+                    vertex_count = #coords,
+                    flags = poly.flags,
+                    areaAndtype = poly.areaAndtype,
+                    neis = poly.neis,
+                    tile = tile_data,
+                    raw_verts = poly.verts,
+                }
+            end
+        end
+    end
+    return polygons
+end
+
+-- Cached loader: returns parsed tile, polygons (for a given transform key), and timings
+function MMap.get_tile_with_polygons(filename, toGameCoordinatesFn, transformKey)
+    local key = transformKey or "default"
+    local t_read0 = core.cpu_ticks and core.cpu_ticks() or 0
+    local t_read1 = t_read0
+    local t_parse0, t_parse1 = 0, 0
+    local t_extract0, t_extract1 = 0, 0
+
+    -- Parse/cache tile
+    local parsed = parsed_tile_cache[filename]
+    if parsed == nil then
+        local data = core.read_data_file(filename)
+        t_read1 = core.cpu_ticks and core.cpu_ticks() or t_read0
+        if data and #data > 0 then
+            t_parse0 = core.cpu_ticks and core.cpu_ticks() or 0
+            parsed = MMap.parse_tile(data)
+            t_parse1 = core.cpu_ticks and core.cpu_ticks() or t_parse0
+            parsed_tile_cache[filename] = parsed or false
+        else
+            parsed_tile_cache[filename] = false
+        end
+    elseif parsed == false then
+        return nil, nil, { read_ms = 0, parse_ms = 0, extract_ms = 0 }
+    end
+
+    if not parsed then
+        return nil, nil, { read_ms = 0, parse_ms = 0, extract_ms = 0 }
+    end
+
+    -- Extract/cache polygons for this transform
+    polygons_cache_by_transform[key] = polygons_cache_by_transform[key] or {}
+    local poly_cache = polygons_cache_by_transform[key]
+    local polys = poly_cache[filename]
+    if polys == nil then
+        t_extract0 = core.cpu_ticks and core.cpu_ticks() or 0
+        polys = MMap.extract_polygons(parsed, toGameCoordinatesFn)
+        t_extract1 = core.cpu_ticks and core.cpu_ticks() or t_extract0
+        poly_cache[filename] = polys or false
+    elseif polys == false then
+        polys = nil
+    end
+
+    local hz = core.cpu_ticks_per_second and core.cpu_ticks_per_second() or 0
+    local function ticks_to_ms(t0, t1)
+        if not hz or hz <= 0 then return 0.0 end
+        return ((t1 or 0) - (t0 or 0)) * 1000.0 / hz
+    end
+    local timings = {
+        read_ms = ticks_to_ms(t_read0, t_read1),
+        parse_ms = ticks_to_ms(t_parse0, t_parse1),
+        extract_ms = ticks_to_ms(t_extract0, t_extract1),
+    }
+    return parsed, polys, timings
 end
 
 return MMap
