@@ -458,7 +458,15 @@ local function parse_polys_from_raw(tile_data)
                 pos = pos + 2
             end
             
-            pos = pos + 12 -- Skip neighbor indices
+            -- Neighbor data (dtPoly.neis[6])
+            local neis = {}
+            for j = 1, 6 do
+                local low = string.byte(tile_data.polys_raw, pos)
+                local high = string.byte(tile_data.polys_raw, pos + 1)
+                local nei = low + high * 256
+                neis[j] = nei
+                pos = pos + 2
+            end
             -- flags (uint16)
             local flags_low = string.byte(tile_data.polys_raw, pos)
             local flags_high = string.byte(tile_data.polys_raw, pos + 1)
@@ -474,6 +482,7 @@ local function parse_polys_from_raw(tile_data)
             table.insert(polys, {
                 id = i,
                 verts = verts,
+                neis = neis,
                 vertCount = vertCount,
                 flags = flags,
                 areaAndtype = areaAndtype
@@ -618,7 +627,8 @@ local function extract_polygons_from_tile(tile_data)
                     coords = coords,
                     vertex_count = #vertices,
                     flags = poly.flags,
-                    areaAndtype = poly.areaAndtype
+                    areaAndtype = poly.areaAndtype,
+                    neis = poly.neis
                 })
             end
         end
@@ -657,16 +667,16 @@ function TileManager:new()
         debug_enabled = false,         -- Disabled by default for API usage
         enhanced_visualization = false,
         draw_polygons = false,
-        max_slope_deg = 50.0,          -- Hide polys steeper than this
         draw_navmesh_enabled = false,  -- Master toggle for mesh drawing (default disabled)
         -- Path smoothing options
         smooth_path_enabled = true,
         smooth_iterations = 2,
         simplify_tolerance = 1.8,
         -- Tile loading
-        tile_load_radius = 1,
+        tile_load_radius = 2,
         -- Keep tiles within this Chebyshev radius; tiles farther than this are evicted
-        tile_keep_radius = 2,
+        -- Set > tile_load_radius to avoid thrashing on tile boundary oscillation
+        tile_keep_radius = 3,
         -- Async graph build budget (ms per frame)
         job_time_budget_ms = 0.5,
         tile_load_budget_ms = 2.0,
@@ -681,7 +691,11 @@ function TileManager:new()
         graph_job = nil,
         -- Path cost preferences
         min_clearance = 1.5,
-        weight_clearance = 0.5,
+        weight_clearance = 0.25,
+        -- Prefer staying on the same vertical layer (bridges vs ground)
+        weight_layer = 2.0,
+        -- Multi-path planning
+        alt_paths_nodes = nil,        -- array of alternative paths (each is array of vec3)
         -- Simplified cost model
         last_auto_recompute_ms = 0,
         -- Pathfinding state
@@ -787,13 +801,25 @@ function TileManager:start()
         end
         -- Continue incremental graph building within a small time budget
         self:step_graph_job_with_budget()
+        -- If a target exists but no path yet, try computing once graph is ready and builder is idle
+        if (not self.move_active) and self.saved_position and (not self.path_nodes or #self.path_nodes < 2) then
+            local graph_ready = self.graph and self.graph.nodes and next(self.graph.nodes) ~= nil
+            local build_idle = (not self.graph_job) or (coroutine.status(self.graph_job) == "dead")
+            if graph_ready and build_idle then
+                self:compute_path_to_saved()
+            end
+        end
     end)
 
     -- Register render callback
     core.register_on_render_callback(function()
         -- Always allow path overlay when requested, independent of debug visualization
-        if self.show_path then
+        local now_ms = core.time() or 0
+        local force_draw = self.path_draw_until_ms and now_ms < self.path_draw_until_ms
+        if self.show_path or force_draw then
             self:draw_path()
+            -- Also draw all polygons that form the current path corridor
+            self:draw_path_polygons()
         end
         -- Gated debug/mesh visualization
         if not self.allow_visualization then return end
@@ -819,13 +845,18 @@ function TileManager:update(pos)
         dlog(self, "Tile changed to: " .. tile_x .. ", " .. tile_y)
         self.previous_tile = self.current_tile
         self.current_tile = new_tile
-        self.tiles_dirty = true
+        -- Debounce small oscillations across the seam; only rebuild if center changed and enough time passed
+        local now = core.time() or 0
+        if not self._last_tile_change_ms or (now - self._last_tile_change_ms) > 300 then
+            self.tiles_dirty = true
+            self._last_tile_change_ms = now
+        end
     end
 
-    -- Always make sure a small neighborhood is loaded and graph is merged
-    local changed = self:ensure_neighbor_tiles_loaded(tile_x, tile_y, self.tile_load_radius or 1)
-    -- Evict far-away tiles to avoid memory bloat over time
-    self:evict_far_tiles(tile_x, tile_y, self.tile_keep_radius or 2)
+    -- Always make sure a symmetric neighborhood is loaded and graph is merged
+    local changed = self:ensure_neighbor_tiles_loaded(tile_x, tile_y, self.tile_load_radius or 2)
+    -- Evict far-away tiles conservatively to avoid thrashing at boundaries
+    self:evict_far_tiles(tile_x, tile_y, self.tile_keep_radius or 3)
     -- On initial startup, self.current_tile is nil; force a first-time graph build once center is loaded
     if changed or self.tiles_dirty or (self.graph and (not next(self.graph.nodes))) then
         self:schedule_incremental_graph_build()
@@ -856,12 +887,14 @@ function TileManager:reset_for_new_area(new_instance_id)
 end
 
 -- Ensure tiles exist around a center tile (radius in tile units) and keep convenience pointers
-function TileManager:ensure_neighbor_tiles_loaded(cx, cy, radius)
+function TileManager:ensure_neighbor_tiles_loaded(cx, cy, radius, budget_ms_override)
     local continent_id = core.get_instance_id()
     local r = math.max(0, math.floor(radius or 0))
     local any_loaded = false
     local call_t0 = core.cpu_ticks and core.cpu_ticks() or 0
-    local budget_ms = self.tile_load_budget_ms or 2.0
+    local budget_ms = budget_ms_override
+        and math.max(0, budget_ms_override)
+        or (self.tile_load_budget_ms or 2.0)
     local hz = core.cpu_ticks_per_second and core.cpu_ticks_per_second() or 0
     local budget_ticks = (hz and hz > 0) and (budget_ms * hz / 1000.0) or 0
     -- Always try to load the center tile first (no budget gating) so initial graph builds without movement
@@ -907,6 +940,7 @@ function TileManager:ensure_neighbor_tiles_loaded(cx, cy, radius)
                 local key = tostring(tx) .. ":" .. tostring(ty)
                 if not self.loaded_tiles[key] then
                     local filename = self:format_tile_filename(continent_id, tx, ty)
+                    dlog(self, string.format("[Nav] Loading tile %d:%d -> %s", tx, ty, filename))
                     local t_read0 = core.cpu_ticks and core.cpu_ticks() or 0
                     local raw = core.read_data_file(filename)
                     local t_read1 = core.cpu_ticks and core.cpu_ticks() or 0
@@ -924,11 +958,16 @@ function TileManager:ensure_neighbor_tiles_loaded(cx, cy, radius)
                             self.tiles[key] = { tile_data = parsed, polygons = polys }
                             self.loaded_tiles[key] = true
                             any_loaded = true
+                            dlog(self, string.format("[Nav] Loaded %s verts=%d polys=%d (read=%.2fms parse=%.2fms extract=%.2fms)", filename, parsed.vertCount or -1, (polys and #polys or 0), read_ms, parse_ms, extract_ms))
                             if self.profile_enabled and (self.profile_log_each_tile or read_ms > self.profile_threshold_ms or parse_ms > self.profile_threshold_ms or extract_ms > self.profile_threshold_ms) then
                                 core.log(string.format("[Perf] tile %s read=%.2fms parse=%.2fms extract=%.2fms verts=%d polys=%d", filename, read_ms, parse_ms, extract_ms, parsed.vertCount or -1, (polys and #polys or 0)))
                             end
                         else
                             core.log_warning("Failed to parse tile: " .. filename .. " reason=" .. tostring(perr))
+                        end
+                    else
+                        if self.debuglog_enabled then
+                            core.log_warning("[Nav] Missing or empty tile file: " .. filename)
                         end
                     end
                 end
@@ -1053,7 +1092,16 @@ function TileManager:evict_far_tiles(cx, cy, keep_radius)
             local ty = tonumber(string.sub(key, sep + 1)) or 0
             local dx = math.abs(tx - cx)
             local dy = math.abs(ty - cy)
-            if dx > r or dy > r then
+            local far_from_current = (dx > r) or (dy > r)
+            local far_from_previous = true
+            if self.previous_tile then
+                local px, py = self.previous_tile.x, self.previous_tile.y
+                local dxp = math.abs(tx - px)
+                local dyp = math.abs(ty - py)
+                far_from_previous = (dxp > r) or (dyp > r)
+            end
+            -- Evict only if far from BOTH current and previous centers to reduce thrash at seams
+            if far_from_current and far_from_previous then
                 table.insert(to_remove, key)
             end
         end
@@ -1147,29 +1195,16 @@ function TileManager:schedule_incremental_graph_build()
         end
         return math.sqrt(min_d2)
     end
-    local function compute_slope_tan(coords)
-        if not coords or #coords < 3 then return 0 end
-        local p1 = coords[1]
-        local nx, ny, nz = 0, 0, 0
-        for i = 2, #coords - 1 do
-            local p2 = coords[i]
-            local p3 = coords[i + 1]
-            local ux, uy, uz = p2.x - p1.x, p2.y - p1.y, p2.z - p1.z
-            local vx, vy, vz = p3.x - p1.x, p3.y - p1.y, p3.z - p1.z
-            nx = nx + (uy * vz - uz * vy)
-            ny = ny + (uz * vx - ux * vz)
-            nz = nz + (ux * vy - uy * vx)
-        end
-        local horiz = math.sqrt(nx * nx + ny * ny)
-        if nz == 0 then return 1e6 end
-        return math.abs(horiz / nz)
-    end
+    -- slope metrics removed (redundant when only using walkable areas)
     local function q(v)
-        -- Use consistent 35cm bins across builders for robust cross-tile edge merging
-        local s = 0.35
-        local x = math.floor(v.x / s + 0.5)
-        local y = math.floor(v.y / s + 0.5)
-        return tostring(x) .. "," .. tostring(y)
+        -- Use 3D quantization to avoid false matches between stacked surfaces (bridge vs ground)
+        -- Relax Z tolerance to better stitch across tile seams where small height mismatches exist
+        local sxy = 0.35
+        local sz = 0.60
+        local x = math.floor(v.x / sxy + 0.5)
+        local y = math.floor(v.y / sxy + 0.5)
+        local z = math.floor(v.z / sz + 0.5)
+        return tostring(x) .. "," .. tostring(y) .. "," .. tostring(z)
     end
     local function edge_key(pa, pb)
         local a1, a2 = q(pa), q(pb)
@@ -1187,10 +1222,12 @@ function TileManager:schedule_incremental_graph_build()
         local function q_cached(v)
             local cached = quant_cache[v]
             if cached then return cached end
-            local s = 0.35
-            local x = math.floor(v.x / s + 0.5)
-            local y = math.floor(v.y / s + 0.5)
-            local key = tostring(x) .. "," .. tostring(y)
+            local sxy = 0.35
+            local sz = 0.60
+            local x = math.floor(v.x / sxy + 0.5)
+            local y = math.floor(v.y / sxy + 0.5)
+            local z = math.floor(v.z / sz + 0.5)
+            local key = tostring(x) .. "," .. tostring(y) .. "," .. tostring(z)
             quant_cache[v] = key
             return key
         end
@@ -1207,10 +1244,20 @@ function TileManager:schedule_incremental_graph_build()
                 local poly = merged[k]
                 local area_id = poly.areaAndtype % 64
                 local clearance = compute_clearance(poly.coords, poly.center)
-                local slope_tan = compute_slope_tan(poly.coords)
-                self.graph.nodes[k] = { id = k, center = poly.center, area = area_id, clearance = clearance, slope_tan = slope_tan }
+                self.graph.nodes[k] = { id = k, center = poly.center, area = area_id, clearance = clearance }
                 self.graph.edges[k] = {}
                 self.poly_lookup[k] = poly
+                if poly.neis and #poly.neis > 0 then
+                    for j = 1, poly.vertex_count do
+                        local nei = poly.neis[j]
+                        -- Lua 5.1: no bitops; check high bit by range instead of '&'
+                        if nei and nei > 0 and nei < 0x8000 then
+                            local nb = nei
+                            if nb ~= k then table.insert(self.graph.edges[k], nb) end
+                        end
+                    end
+                end
+                -- Always also build geometric adjacency to connect across tiles/layers
                 if poly.coords and #poly.coords >= 2 then
                     for j = 1, #poly.coords do
                         local a = poly.coords[j]
@@ -1280,6 +1327,44 @@ function TileManager:step_graph_job_with_budget()
             return
         end
     until ((core.cpu_ticks() or start_ticks) - start_ticks) >= budget_ticks
+end
+
+-- Optionally complete the current graph build now, within a max time budget (ms)
+function TileManager:finish_graph_build_now(max_ms)
+    if not self.graph_job or coroutine.status(self.graph_job) == "dead" then return end
+    local hz = core.cpu_ticks_per_second() or 0
+    local start_ticks = core.cpu_ticks() or 0
+    local budget_ticks = (hz > 0) and ((max_ms or 30.0) * hz / 1000.0) or 0
+    while self.graph_job and coroutine.status(self.graph_job) ~= "dead" do
+        local ok, err = coroutine.resume(self.graph_job)
+        if not ok then
+            core.log_error("graph_job error: " .. tostring(err))
+            self.graph_job = nil
+            break
+        end
+        if budget_ticks > 0 then
+            local now = core.cpu_ticks() or start_ticks
+            if (now - start_ticks) >= budget_ticks then break end
+        end
+    end
+end
+
+-- Fully finish the current graph build (blocking) regardless of time; returns true if finished
+function TileManager:force_build_graph_now()
+    local finished = false
+    while self.graph_job and coroutine.status(self.graph_job) ~= "dead" do
+        local ok, err = coroutine.resume(self.graph_job)
+        if not ok then
+            core.log_error("graph_job error: " .. tostring(err))
+            self.graph_job = nil
+            break
+        end
+    end
+    if not self.graph_job or coroutine.status(self.graph_job) == "dead" then
+        finished = true
+        self.graph_job = nil
+    end
+    return finished
 end
 
 -- Create navigation mesh data structure (FIXED VERSION)
@@ -1514,10 +1599,22 @@ function TileManager:build_graph(polygons)
     for i, poly in ipairs(polygons) do
         local area_id = poly.areaAndtype % 64
         local clearance = compute_clearance(poly.coords, poly.center)
-        local slope_tan = compute_slope_tan(poly.coords)
-        self.graph.nodes[i] = { id = i, center = poly.center, area = area_id, clearance = clearance, slope_tan = slope_tan }
+        self.graph.nodes[i] = { id = i, center = poly.center, area = area_id, clearance = clearance }
         self.graph.edges[i] = {}
         self.poly_lookup[i] = poly
+        -- Prefer Detour neighbor refs where available (intra-tile)
+        if poly.neis and #poly.neis > 0 then
+            for j = 1, poly.vertex_count do
+                local nei = poly.neis[j]
+                if nei and nei > 0 and nei < 0x8000 then
+                    local nb = nei
+                    if nb >= 1 and nb <= #polygons and nb ~= i then
+                        table.insert(self.graph.edges[i], nb)
+                    end
+                end
+            end
+        end
+        -- Always also do geometric adjacency to connect across tiles/layers
         if poly.coords and #poly.coords >= 2 then
             for j = 1, #poly.coords do
                 local a = poly.coords[j]
@@ -1565,6 +1662,21 @@ function TileManager:reconstruct_poly_path(came_from, current)
     return ids
 end
 
+-- Utility: total 3D length of a point path
+local function path_total_length(points)
+    if not points or #points < 2 then return 0 end
+    local sum = 0
+    for i = 2, #points do
+        local a = points[i - 1]
+        local b = points[i]
+        local dx = (b.x or 0) - (a.x or 0)
+        local dy = (b.y or 0) - (a.y or 0)
+        local dz = (b.z or 0) - (a.z or 0)
+        sum = sum + math.sqrt(dx * dx + dy * dy + dz * dz)
+    end
+    return sum
+end
+
 function TileManager:a_star(start_id, goal_id)
     if not start_id or not goal_id then return nil end
     local open = { [start_id] = true }
@@ -1596,7 +1708,7 @@ function TileManager:a_star(start_id, goal_id)
             local cost = heuristic(n_best.center, n_nb.center)
             -- Clearance bias (prefer wide polys)
             local min_clear = self.min_clearance or 1.5
-            local w_clear = self.weight_clearance or 0.5
+            local w_clear = self.weight_clearance or 0.25
             local clearance = math.min(n_best.clearance or 0, n_nb.clearance or 0)
             if clearance < min_clear then
                 local penalty = (min_clear - clearance) * 2.0
@@ -1605,10 +1717,12 @@ function TileManager:a_star(start_id, goal_id)
                 local bonus = math.min(3.0, (clearance - min_clear))
                 cost = cost - bonus * w_clear * 0.5
             end
-            -- Slope bias (prefer flatter)
-            local w_slope = self.weight_slope or 0.2
-            local slope = 0.5 * ((n_best.slope_tan or 0) + (n_nb.slope_tan or 0))
-            cost = cost + w_slope * slope
+            -- Vertical layer cohesion: penalize large z jumps to discourage bridge<->ground hops
+            local w_layer = self.weight_layer or 2.0
+            local dz = math.abs((n_best.center.z or 0) - (n_nb.center.z or 0))
+            if dz > 0.8 then
+                cost = cost + w_layer * math.min(5.0, dz)
+            end
             -- Bias against water (area 9) to avoid swimming when possible
             if (n_best.area == 9) or (n_nb.area == 9) then
                 cost = cost + 5.0
@@ -1629,6 +1743,111 @@ function TileManager:a_star(start_id, goal_id)
     return nil
 end
 
+-- Compute up to k alternative simple paths by discouraging previously used edges
+function TileManager:compute_k_paths(start_id, goal_id, k)
+    local results = {}
+    local discouraged = {} -- soft penalties
+    local bans = {}        -- hard-banned edges per iteration: set of key->true
+    local seen = {}
+    local function edge_key(a, b)
+        if a < b then return tostring(a).."-"..tostring(b) else return tostring(b).."-"..tostring(a) end
+    end
+    local function local_a_star()
+        if not start_id or not goal_id then return nil end
+        local open = { [start_id] = true }
+        local open_list = { start_id }
+        local came_from = {}
+        local g = { [start_id] = 0 }
+        local h = {}
+        h[start_id] = heuristic(self.graph.nodes[start_id].center, self.graph.nodes[goal_id].center)
+        while #open_list > 0 do
+            local best_idx, best_id, best_f = 1, open_list[1], (g[open_list[1]] or 1e30) + (h[open_list[1]] or 0)
+            for i = 2, #open_list do
+                local id = open_list[i]
+                local f = (g[id] or 1e30) + (h[id] or 0)
+                if f < best_f then best_f = f; best_idx = i; best_id = id end
+            end
+            table.remove(open_list, best_idx)
+            open[best_id] = nil
+            if best_id == goal_id then
+                return self:reconstruct_poly_path(came_from, best_id)
+            end
+            for _, nb in ipairs(self.graph.edges[best_id] or {}) do
+                local n_best = self.graph.nodes[best_id]
+                local n_nb = self.graph.nodes[nb]
+                local cost = heuristic(n_best.center, n_nb.center)
+                local min_clear = self.min_clearance or 1.5
+                local w_clear = self.weight_clearance or 0.25
+                local clearance = math.min(n_best.clearance or 0, n_nb.clearance or 0)
+                if clearance < min_clear then
+                    local penalty = (min_clear - clearance) * 2.0
+                    cost = cost + penalty * w_clear
+                else
+                    local bonus = math.min(3.0, (clearance - min_clear))
+                    cost = cost - bonus * w_clear * 0.5
+                end
+                local w_layer = self.weight_layer or 2.0
+                local dz = math.abs((n_best.center.z or 0) - (n_nb.center.z or 0))
+                if dz > 0.8 then cost = cost + w_layer * math.min(5.0, dz) end
+                if (n_best.area == 9) or (n_nb.area == 9) then cost = cost + 5.0 end
+                -- Discourage previously used edges to diversify results
+                local ek = edge_key(best_id, nb)
+                if bans[ek] then
+                    cost = cost + 1e6 -- effectively ban this edge for this run
+                end
+                local times = discouraged[ek] or 0
+                if times > 0 then cost = cost + times * 50.0 end
+                local tentative_g = (g[best_id] or 1e30) + cost
+                if tentative_g < (g[nb] or 1e30) then
+                    came_from[nb] = best_id
+                    g[nb] = tentative_g
+                    h[nb] = h[nb] or heuristic(self.graph.nodes[nb].center, self.graph.nodes[goal_id].center)
+                    if not open[nb] then open[nb] = true; table.insert(open_list, nb) end
+                end
+            end
+        end
+        return nil
+    end
+    local max_k = math.max(1, math.floor(k or 1))
+    for iter = 1, max_k do
+        local poly_ids = local_a_star()
+        if not poly_ids or #poly_ids == 0 then break end
+        local key = table.concat(poly_ids, ",")
+        if seen[key] then
+            -- Already have this path; discourage mid-edge more strongly and retry
+            if #poly_ids >= 2 then
+                local mid = math.floor(#poly_ids / 2)
+                local ekm = edge_key(poly_ids[mid], poly_ids[mid + 1])
+                discouraged[ekm] = (discouraged[ekm] or 0) + 3
+            end
+        else
+            table.insert(results, poly_ids)
+            seen[key] = true
+            -- Prepare next iteration with a different logic:
+            -- Choose a spur point along the last path and hard-ban that outgoing edge to force a different branch.
+            if #poly_ids >= 2 then
+                local pivot
+                if (iter % 3) == 1 then
+                    pivot = 2 -- near start
+                elseif (iter % 3) == 2 then
+                    pivot = math.floor(#poly_ids / 2) -- middle
+                else
+                    pivot = #poly_ids - 1 -- near end
+                end
+                local eka = edge_key(poly_ids[pivot], poly_ids[pivot + 1])
+                bans[eka] = true
+            end
+        end
+        -- Discourage edges from this solution for the next run
+        for i = 1, #poly_ids - 1 do
+            local a, b = poly_ids[i], poly_ids[i + 1]
+            local ek = edge_key(a, b)
+            discouraged[ek] = (discouraged[ek] or 0) + 1
+        end
+    end
+    return results
+end
+
 function TileManager:compute_path_to_saved()
     if not self.saved_position then
         core.log_warning("No saved position set")
@@ -1640,16 +1859,25 @@ function TileManager:compute_path_to_saved()
     -- Make sure we have tiles around start and goal; rebuild only if anything changed
     local sx, sy = mesh_helper.get_tile_coordinates(start_pos.x, start_pos.y)
     local gx, gy = mesh_helper.get_tile_coordinates(self.saved_position.x, self.saved_position.y)
-    local c1 = self:ensure_neighbor_tiles_loaded(sx, sy, self.tile_load_radius or 1)
-    local c2 = self:ensure_neighbor_tiles_loaded(gx, gy, self.tile_load_radius or 1)
+    -- Ensure start/goal neighborhoods are loaded with a slightly higher budget for responsiveness
+    -- Load a symmetric window [-r, +r] around start and goal (default r=2)
+    local r = self.tile_load_radius or 2
+    local c1 = self:ensure_neighbor_tiles_loaded(sx, sy, r, 12.0)
+    local c2 = self:ensure_neighbor_tiles_loaded(gx, gy, r, 12.0)
     if c1 or c2 then
         self:schedule_incremental_graph_build()
+        -- Force complete build so a path is guaranteed
+        self:force_build_graph_now()
     end
     if not self.graph or not self.graph.nodes or next(self.graph.nodes) == nil then
         -- Try to kick a build if not scheduled yet
         self:schedule_incremental_graph_build()
-        core.log_warning("Graph not ready")
-        return
+        -- As a fallback, fully finish the build now
+        self:force_build_graph_now()
+        if not self.graph or not self.graph.nodes or next(self.graph.nodes) == nil then
+            core.log_warning("Graph not ready")
+            return
+        end
     end
     local start_id = self:find_closest_node(start_pos)
     local goal_id = self:find_closest_node(self.saved_position)
@@ -1657,19 +1885,31 @@ function TileManager:compute_path_to_saved()
         core.log_warning("Failed to find start/goal nodes")
         return
     end
-    local poly_ids = self:a_star(start_id, goal_id)
-    if not poly_ids or #poly_ids == 0 then
+    local alt_sets = self:compute_k_paths(start_id, goal_id, 10)
+    if not alt_sets or #alt_sets == 0 then
         core.log_warning("A* returned no path")
         return
     end
-    -- Build a corridor path using portal midpoints instead of polygon centers
-    local corridor = self:build_portal_center_path(poly_ids)
-    if self.smooth_path_enabled then
-        corridor = self:simplify_path(corridor, 1.8)
-        corridor = self:chaikin_smooth(corridor, 2)
+    -- Convert and score paths; keep top 10 by length
+    local best_nodes, best_polys
+    local alt_nodes = {}
+    for idx = 1, math.min(10, #alt_sets) do
+        local ids = alt_sets[idx]
+        local corridor = self:build_portal_center_path(ids)
+        if self.smooth_path_enabled then
+            corridor = self:simplify_path(corridor, 1.8)
+            corridor = self:chaikin_smooth(corridor, 2)
+        end
+        alt_nodes[#alt_nodes + 1] = corridor
+        -- Score by actual path distance (prefer shortest physical distance)
+        local dist = path_total_length(corridor)
+        if not best_nodes or dist < (path_total_length(best_nodes) or 1e30) then
+            best_nodes, best_polys = corridor, ids
+        end
     end
-    self.path_nodes = corridor
-    self.path_poly_ids = poly_ids
+    self.alt_paths_nodes = alt_nodes
+    self.path_nodes = best_nodes
+    self.path_poly_ids = best_polys
     dlog(self, "Path with " .. #self.path_nodes .. " nodes ready")
     -- Ensure path is visible without starting movement
     self.show_path = true
@@ -1681,12 +1921,17 @@ function TileManager:path_from_to(start_pos, end_pos)
     -- Ensure tiles around start and end are loaded
     local sx, sy = mesh_helper.get_tile_coordinates(start_pos.x, start_pos.y)
     local gx, gy = mesh_helper.get_tile_coordinates(end_pos.x, end_pos.y)
-    local c1 = self:ensure_neighbor_tiles_loaded(sx, sy, self.tile_load_radius or 1)
-    local c2 = self:ensure_neighbor_tiles_loaded(gx, gy, self.tile_load_radius or 1)
-    if c1 or c2 then self:schedule_incremental_graph_build() end
+    local r = self.tile_load_radius or 2
+    local c1 = self:ensure_neighbor_tiles_loaded(sx, sy, r, 12.0)
+    local c2 = self:ensure_neighbor_tiles_loaded(gx, gy, r, 12.0)
+    if c1 or c2 then
+        self:schedule_incremental_graph_build()
+        self:force_build_graph_now()
+    end
     if not self.graph or not self.graph.nodes or next(self.graph.nodes) == nil then
         self:schedule_incremental_graph_build()
-        return nil
+        self:force_build_graph_now()
+        if not self.graph or not self.graph.nodes or next(self.graph.nodes) == nil then return nil end
     end
     local start_id = self:find_closest_node(start_pos)
     local goal_id = self:find_closest_node(end_pos)
@@ -1698,7 +1943,14 @@ function TileManager:path_from_to(start_pos, end_pos)
         corridor = self:simplify_path(corridor, 1.8)
         corridor = self:chaikin_smooth(corridor, 2)
     end
-    return corridor
+    -- Re-run a local refinement: pick shorter among raw corridor and a lightly re-sampled path
+    -- (safeguard against right-angle artifacts when crossing tiles)
+    local best = corridor
+    local alt = self:simplify_path(corridor, 1.2)
+    if alt and #alt >= 2 and path_total_length(alt) < path_total_length(best) then
+        best = alt
+    end
+    return best
 end
 
 -- Start movement along current path towards saved position
@@ -2097,6 +2349,21 @@ function TileManager:build_portal_center_path(poly_ids)
     return points
 end
 
+-- Utility: total 3D length of a point path
+local function path_total_length(points)
+    if not points or #points < 2 then return 0 end
+    local sum = 0
+    for i = 2, #points do
+        local a = points[i - 1]
+        local b = points[i]
+        local dx = (b.x or 0) - (a.x or 0)
+        local dy = (b.y or 0) - (a.y or 0)
+        local dz = (b.z or 0) - (a.z or 0)
+        sum = sum + math.sqrt(dx * dx + dy * dy + dz * dz)
+    end
+    return sum
+end
+
 function TileManager:draw_path_polygons()
     if not self.path_poly_ids or not self.poly_lookup then return end
     local color = require('common/color')
@@ -2276,7 +2543,6 @@ function TileManager:render_menu()
         self.btn_save = core.menu.button("lx_nav_save_pos")
         self.btn_path = core.menu.button("lx_nav_make_path")
         self.btn_move = core.menu.button("lx_nav_move_to_saved")
-        self.slider_slope = core.menu.slider_float(15.0, 85.0, self.max_slope_deg, "lx_nav_max_slope")
         self.cb_smooth = core.menu.checkbox(true, "lx_nav_smooth_enabled")
         
         self.cb_draw_mesh = core.menu.checkbox(false, "lx_nav_draw_mesh")
@@ -2313,10 +2579,7 @@ function TileManager:render_menu()
             self:start_move_to_saved()
         end
 
-        -- Slope slider
-        self.slider_slope:render("Max slope (deg)")
-        local v = self.slider_slope:get()
-        if v then self.max_slope_deg = v end
+        -- Slope controls removed (using walkable filtering only)
 
         -- Smoothing controls
         self.cb_smooth:render("Smooth path")
@@ -2331,10 +2594,27 @@ end
 function TileManager:draw_path()
     if not self.path_nodes or #self.path_nodes < 2 then return end
     local color = require('common/color')
+    local vec3 = require('common/geometry/vector_3')
+    local path_col = color.new(50, 150, 255, 255)
+    -- Draw alternative paths (if any)
+    if self.alt_paths_nodes and #self.alt_paths_nodes > 0 then
+        for i = 1, math.min(10, #self.alt_paths_nodes) do
+            local nodes = self.alt_paths_nodes[i]
+            if nodes and #nodes >= 2 then
+                -- Vary color/alpha per alternative to make them visible
+                local hue = (i * 23) % 255
+                local a = math.max(80, 200 - i * 10)
+                local col = color.new(60 + hue, 140 + ((i*13)%60), 255, a)
+                for j = 1, #nodes - 1 do
+                    core.graphics.line_3d(vec3.new(nodes[j].x, nodes[j].y, nodes[j].z + 0.01), vec3.new(nodes[j+1].x, nodes[j+1].y, nodes[j+1].z + 0.01), col, 2.5)
+                end
+            end
+        end
+    end
     for i = 1, #self.path_nodes - 1 do
         local p1 = self.path_nodes[i]
         local p2 = self.path_nodes[i + 1]
-        core.graphics.line_3d(p1, p2, color.new(50, 150, 255, 255), 3.0)
+        core.graphics.line_3d(vec3.new(p1.x, p1.y, p1.z), vec3.new(p2.x, p2.y, p2.z), path_col, 3.0)
     end
 
     -- Guidance direction: draw short forward vector from player towards the next clear point
@@ -2362,7 +2642,45 @@ function TileManager:draw_path()
         end
         if self.show_path then
             local color2 = color.new(0, 255, 180, 220)
-            core.graphics.line_3d(pos, best, color2, 4.0)
+            core.graphics.line_3d(vec3.new(pos.x, pos.y, pos.z), vec3.new(best.x, best.y, best.z), color2, 4.0)
+        end
+    end
+    -- Also highlight the two neighboring polygons around the player's nearest path polygon
+    if self.path_poly_ids and self.poly_lookup then
+        local best_idx, best_d2 = nil, 1e30
+        for i, pid in ipairs(self.path_poly_ids) do
+            local poly = self.poly_lookup[pid]
+            if poly and poly.center then
+                local cx, cy, cz = poly.center.x, poly.center.y, poly.center.z
+                local dx, dy, dz = cx - pos.x, cy - pos.y, cz - pos.z
+                local d2 = dx * dx + dy * dy + dz * dz
+                if d2 < best_d2 then best_d2 = d2; best_idx = i end
+            end
+        end
+        local function draw_one_poly(poly, edge_c, fill_c, zoff)
+            if not poly or not poly.coords or #poly.coords < 3 then return end
+            local base = poly.coords[1]
+            for i = 2, #poly.coords - 1 do
+                local p1 = vec3.new(base.x, base.y, base.z + zoff)
+                local p2 = vec3.new(poly.coords[i].x, poly.coords[i].y, poly.coords[i].z + zoff)
+                local p3 = vec3.new(poly.coords[i+1].x, poly.coords[i+1].y, poly.coords[i+1].z + zoff)
+                core.graphics.triangle_3d_filled(p1, p2, p3, fill_c)
+            end
+            for i = 1, #poly.coords do
+                local a = poly.coords[i]
+                local b = poly.coords[(i % #poly.coords) + 1]
+                core.graphics.line_3d(vec3.new(a.x, a.y, a.z + zoff + 0.005), vec3.new(b.x, b.y, b.z + zoff + 0.005), edge_c, 2.0)
+            end
+        end
+        if best_idx then
+            local n_edge = color.new(80, 255, 160, 200)
+            local n_fill = color.new(50, 255, 160, 50)
+            if best_idx > 1 then
+                draw_one_poly(self.poly_lookup[self.path_poly_ids[best_idx - 1]], n_edge, n_fill, 0.01)
+            end
+            if best_idx < #self.path_poly_ids then
+                draw_one_poly(self.poly_lookup[self.path_poly_ids[best_idx + 1]], n_edge, n_fill, 0.01)
+            end
         end
     end
 end
@@ -2600,8 +2918,6 @@ function TileManager:draw_walkable_polygons()
     local water_edge   = color.new(120, 190, 255, 80)
     local ground11_fill = color.new(170, 170, 170, 80)   -- area 11: gray, more transparent
     local ground11_edge = color.new(180, 180, 180, 100)
-    local max_slope_rad = (self.max_slope_deg or 55.0) * math.pi / 180.0
-    local max_slope_tan = math.tan(max_slope_rad)
     local edge_width = 3.0
 
     -- Helper to draw a polygon list against a given tile_data
@@ -2620,32 +2936,6 @@ function TileManager:draw_walkable_polygons()
                             local gx, gy, gz = toGameCoordinates(mesh_x, mesh_y, mesh_z)
                             table.insert(points, vec3.new(gx, gy, gz))
                         end
-                    end
-                end
-                local is_too_steep = false
-                if #points >= 3 then
-                    local p1 = points[1]
-                    local sum_nx, sum_ny, sum_nz = 0.0, 0.0, 0.0
-                    for i = 2, #points - 1 do
-                        local p2 = points[i]
-                        local p3 = points[i + 1]
-                        local ux, uy, uz = p2.x - p1.x, p2.y - p1.y, p2.z - p1.z
-                        local vx, vy, vz = p3.x - p1.x, p3.y - p1.y, p3.z - p1.z
-                        local nx = uy * vz - uz * vy
-                        local ny = uz * vx - ux * vz
-                        local nz = ux * vy - uy * vx
-                        local w = math.sqrt(nx * nx + ny * ny + nz * nz)
-                        if w > 1e-4 then
-                            sum_nx = sum_nx + nx
-                            sum_ny = sum_ny + ny
-                            sum_nz = sum_nz + nz
-                        end
-                    end
-                    local horiz_len = math.sqrt(sum_nx * sum_nx + sum_ny * sum_ny)
-                    local vert = math.abs(sum_nz)
-                    if vert > 0 then
-                        local slope_tan = horiz_len / vert
-                        if slope_tan > max_slope_tan then is_too_steep = true end
                     end
                 end
                 if #points >= 3 then

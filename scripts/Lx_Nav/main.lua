@@ -49,6 +49,17 @@ function _G.Lx_Nav.init()
         -- Fake player start by creating path from start_pos: temporarily override find_closest_node input
         -- Easiest: move player-based start reading by a local wrapper
         local path = tm:path_from_to(start_pos, end_pos)
+        if path and #path >= 2 then
+          tm.path_nodes = path
+          -- Try to derive polygon corridor for neighbor highlighting
+          local sid = tm:find_closest_node(start_pos)
+          local gid = tm:find_closest_node(end_pos)
+          if sid and gid then
+            tm.path_poly_ids = tm:a_star(sid, gid)
+          end
+          -- Force-draw path for a while so users see it without toggling flags
+          tm.path_draw_until_ms = (core.time() or 0) + 300000 -- 5 minutes
+        end
         tm.saved_position = saved
         return path
       else

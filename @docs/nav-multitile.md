@@ -7,7 +7,7 @@ Overview
 How it works
 - Tile loading: `TileManager:ensure_neighbor_tiles_loaded(cx, cy, radius)` pulls tiles from `mmaps/` via `core.read_data_file` and parses them with `MMap.parse_tile`.
 - Merge graph: `TileManager:rebuild_merged_graph()` concatenates polygons from `self.tiles` and builds a graph via `TileManager:build_graph`.
-- Cross-tile edges: edges are keyed using 10cm-quantized XY world coordinates so adjacent tiles share edges.
+- Cross-tile edges: edges are keyed using quantized world coordinates so adjacent tiles share edges. XY uses ~35cm bins; Z uses a relaxed ~60cm bin to tolerate tiny height mismatches at tile seams.
 - Path building: `compute_path_to_saved()` makes sure start/goal neighborhoods are loaded, then runs A* and builds a corridor using portal midpoints.
  - Edge padding: portal midpoints are nudged towards the next polygon center by `safety_margin` meters to keep the path away from walls/edges. Tune via the menu slider.
 
