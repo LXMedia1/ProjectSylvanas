@@ -49,6 +49,9 @@ local function ticks_to_ms(ticks)
     return (ticks * 1000.0) / hz
 end
 
+-- Forward declaration for path straightening helper
+local visibility_straighten
+
 local TileManager = {}
 function TileManager:new()
     local obj = {
@@ -60,8 +63,8 @@ function TileManager:new()
         draw_navmesh_enabled = false,  -- Master toggle for mesh drawing (default disabled)
         -- Path smoothing options
         smooth_path_enabled = true,
-        smooth_iterations = 2,
-        simplify_tolerance = 1.8,
+        smooth_iterations = 3,
+        simplify_tolerance = 3.0,
         -- Tile loading
         tile_load_radius = 2,
         -- Keep tiles within this Chebyshev radius; tiles farther than this are evicted
@@ -147,7 +150,7 @@ function TileManager:new()
         allow_visualization = false
         ,
         -- Detour-strict behavior: funnel-only, no extra smoothing
-        strict_detour_mode = true
+        strict_detour_mode = false
         ,
         -- Corner rounding inside corridor for natural turns
         round_corners_enabled = true,
@@ -1241,6 +1244,7 @@ function TileManager:compute_k_paths(start_id, goal_id, k)
     local bans = {}        -- hard-banned edges per iteration: set of key->true
     local seen = {}
     local function edge_key(a, b)
+        if (not a) or (not b) then return nil end
         if a < b then return tostring(a).."-"..tostring(b) else return tostring(b).."-"..tostring(a) end
     end
     local function local_a_star()
@@ -1283,11 +1287,13 @@ function TileManager:compute_k_paths(start_id, goal_id, k)
                 if (n_best.area == 9) or (n_nb.area == 9) then cost = cost + 5.0 end
                 -- Discourage previously used edges to diversify results
                 local ek = edge_key(best_id, nb)
-                if bans[ek] then
-                    cost = cost + 1e6 -- effectively ban this edge for this run
+                if ek then
+                    if bans[ek] then
+                        cost = cost + 1e6 -- effectively ban this edge for this run
+                    end
+                    local times = discouraged[ek] or 0
+                    if times > 0 then cost = cost + times * 50.0 end
                 end
-                local times = discouraged[ek] or 0
-                if times > 0 then cost = cost + times * 50.0 end
                 local tentative_g = (g[best_id] or 1e30) + cost
                 if tentative_g < (g[nb] or 1e30) then
                     came_from[nb] = best_id
@@ -1309,7 +1315,7 @@ function TileManager:compute_k_paths(start_id, goal_id, k)
             if #poly_ids >= 2 then
                 local mid = math.floor(#poly_ids / 2)
                 local ekm = edge_key(poly_ids[mid], poly_ids[mid + 1])
-                discouraged[ekm] = (discouraged[ekm] or 0) + 3
+                if ekm then discouraged[ekm] = (discouraged[ekm] or 0) + 3 end
             end
         else
             table.insert(results, poly_ids)
@@ -1326,14 +1332,16 @@ function TileManager:compute_k_paths(start_id, goal_id, k)
                     pivot = #poly_ids - 1 -- near end
                 end
                 local eka = edge_key(poly_ids[pivot], poly_ids[pivot + 1])
-                bans[eka] = true
+                if eka then bans[eka] = true end
             end
         end
         -- Discourage edges from this solution for the next run
         for i = 1, #poly_ids - 1 do
             local a, b = poly_ids[i], poly_ids[i + 1]
             local ek = edge_key(a, b)
-            discouraged[ek] = (discouraged[ek] or 0) + 1
+            if ek then
+                discouraged[ek] = (discouraged[ek] or 0) + 1
+            end
         end
     end
     return results
@@ -1392,8 +1400,9 @@ function TileManager:compute_path_to_saved()
         local corridor = funnel and path_inside_corridor(funnel, ids, self.poly_lookup) and funnel or safe_corridor
         if (not self.strict_detour_mode) and self.smooth_path_enabled then
             local raw_before = corridor
-            corridor = self:simplify_path(corridor, 1.8)
-            corridor = self:chaikin_smooth(corridor, 2)
+            corridor = self:simplify_path(corridor, self.simplify_tolerance or 3.0)
+            corridor = self:chaikin_smooth(corridor, self.smooth_iterations or 3)
+            corridor = visibility_straighten(corridor, ids, self.poly_lookup, 2.0)
             if (not corridor) or (#corridor < 3) then
                 corridor = raw_before
             elseif not path_inside_corridor(corridor, ids, self.poly_lookup) then
@@ -1474,8 +1483,9 @@ function TileManager:path_from_to(start_pos, end_pos)
     local corridor = funnel and path_inside_corridor(funnel, poly_ids, self.poly_lookup) and funnel or safe_corridor
     if (not self.strict_detour_mode) and self.smooth_path_enabled then
         local raw_before = corridor
-        corridor = self:simplify_path(corridor, 1.8)
-        corridor = self:chaikin_smooth(corridor, 2)
+        corridor = self:simplify_path(corridor, self.simplify_tolerance or 3.0)
+        corridor = self:chaikin_smooth(corridor, self.smooth_iterations or 3)
+        corridor = visibility_straighten(corridor, poly_ids, self.poly_lookup, 2.0)
         if (not corridor) or (#corridor < 3) then
             corridor = raw_before
         elseif not path_inside_corridor(corridor, poly_ids, self.poly_lookup) then
@@ -1517,7 +1527,7 @@ function TileManager:path_from_to(start_pos, end_pos)
     if not self.strict_detour_mode then
         -- Re-run a local refinement: pick shorter among raw corridor and a lightly re-sampled path
         -- (safeguard against right-angle artifacts when crossing tiles)
-        local alt = self:simplify_path(corridor, 1.2)
+        local alt = self:simplify_path(corridor, math.min(2.0, (self.simplify_tolerance or 3.0) * 0.66))
         if alt and #alt >= 2 and path_total_length(alt) < path_total_length(best) then
             best = alt
         end
@@ -2177,6 +2187,54 @@ function path_inside_corridor(points, poly_ids, poly_lookup)
         if not ok then return false end
     end
     return true
+end
+
+-- Check whether a straight segment from a to b remains inside the corridor by sampling
+local function segment_stays_inside_corridor(a, b, poly_ids, poly_lookup, step)
+    local dx, dy = (b.x - a.x), (b.y - a.y)
+    local dist = math.sqrt(dx * dx + dy * dy)
+    local s = math.max(1, math.floor((dist / (step or 2.0)) + 0.5))
+    for i = 0, s do
+        local t = i / s
+        local p = { x = a.x + dx * t, y = a.y + dy * t, z = a.z + (b.z - a.z) * t }
+        local inside = false
+        for _, pid in ipairs(poly_ids or {}) do
+            local poly = poly_lookup and poly_lookup[pid]
+            if poly and poly.coords and #poly.coords >= 3 then
+                if point_in_polygon_xy(p, poly.coords) then inside = true; break end
+            end
+        end
+        if not inside then return false end
+    end
+    return true
+end
+
+-- Aggressively straighten by connecting each node to the farthest visible future node
+function visibility_straighten(points, poly_ids, poly_lookup, step)
+    if not points or #points < 3 then return points end
+    local result = {}
+    local i = 1
+    while i < #points do
+        result[#result + 1] = points[i]
+        local furthest = i + 1
+        for j = #points, i + 1, -1 do
+            if segment_stays_inside_corridor(points[i], points[j], poly_ids, poly_lookup, step) then
+                furthest = j
+                break
+            end
+        end
+        if furthest <= i then
+            break
+        elseif furthest == i + 1 then
+            i = i + 1
+        else
+            i = furthest
+        end
+    end
+    if result[#result] ~= points[#points] then
+        result[#result + 1] = points[#points]
+    end
+    return result
 end
 
 -- Utility: total 3D length of a point path
