@@ -1,26 +1,4 @@
--- Binary data reading functions
-local function read_u32(data, pos)
-    if pos + 3 > #data then return nil, pos end
-    local b1, b2, b3, b4 = string.byte(data, pos, pos + 3)
-    -- Little-endian
-    local value = b1 + (b2 * 256) + (b3 * 65536) + (b4 * 16777216)
-    return value, pos + 4
-end
-
-local function read_f32(data, pos)
-    local uint_val, new_pos = read_u32(data, pos)
-    if not uint_val then return nil, new_pos end
-
-    -- Convert uint32 to float (IEEE 754)
-    if uint_val == 0 then return 0.0, new_pos end
-
-    -- Lua 5.1 compatible bitwise operations
-    local sign = (uint_val >= 0x80000000) and -1 or 1
-    local exponent = (math.floor(uint_val / 0x800000) % 0x100) - 127
-    local mantissa = (uint_val % 0x800000) / 0x800000 + 1
-
-    return sign * mantissa * (2 ^ exponent), new_pos
-end
+-- Binary reading helpers are no longer needed here; decoding is centralized in mmap_decode
 
 -- Convert Recast (x,y,z) to game (x,y,z)
 -- User specified: x_game = z_mesh, y_game = x_mesh, z_game = y_mesh
@@ -33,556 +11,52 @@ local function dlog(self, msg)
     if self and self.debuglog_enabled then core.log(msg) end
 end
 
--- MeshParser module
-local MeshParser = {}
+-- MeshParser now delegates to mmap_decode for all binary parsing
 local MMap = require('mmap_decode')
-
+local MeshParser = {}
 function MeshParser.parse_tile(data)
-    if #data < 120 then -- Minimum size for both headers
-        return nil, "Data too short for mmap tile"
-    end
-
-    -- Size constants
-    local POLY_SIZE = 32        -- dtPoly
-    local POLY_DETAIL_SIZE = 12 -- dtPolyDetail (10 bytes + 2 padding)
-    local DETAIL_VERT_SIZE = 12 -- 3 * uint32 (packed: upper 16 bits = quantized coord, lower 16 bits = flags)
-    local BVNODE_SIZE = 16      -- dtBVNode
-    local DETAIL_TRI_SIZE = 4   -- dtDetailTri (4 x uint8)
-    local OFFMESH_CON_SIZE = 32 -- dtOffMeshConnection
-    local LINK_SIZE = 16        -- dtLink
-
-    local pos = 1
-    local tile_data = {}
-
-    -- MmapTileHeader (20 Byte) - Only 5 fields!
-    local mmap_magic = read_u32(data, pos)
-    pos = pos + 4
-    if mmap_magic ~= 0x4D4D4150 then -- 'MMAP' in little-endian (fixed byte order)
-        return nil, "Invalid mmap magic"
-    end
-    tile_data.dtVersion, pos = read_u32(data, pos)
-    tile_data.mmapVersion, pos = read_u32(data, pos)
-    tile_data.dataSize, pos = read_u32(data, pos)
-    tile_data.flags, pos = read_u32(data, pos)
-
-    -- dtMeshHeader (100 Byte)
-    tile_data.meshMagic = read_u32(data, pos)
-    pos = pos + 4
-    tile_data.meshVersion, pos = read_u32(data, pos)
-    tile_data.tileX, pos = read_u32(data, pos) -- int32
-    tile_data.tileY, pos = read_u32(data, pos) -- int32
-    tile_data.layer, pos = read_u32(data, pos) -- int32
-    tile_data.userId, pos = read_u32(data, pos)
-    tile_data.polyCount, pos = read_u32(data, pos)
-    tile_data.vertCount, pos = read_u32(data, pos)
-    tile_data.maxLinkCount, pos = read_u32(data, pos)
-    tile_data.detailMeshCount, pos = read_u32(data, pos)
-    tile_data.detailVertCount, pos = read_u32(data, pos)
-    tile_data.detailTriCount, pos = read_u32(data, pos)
-    tile_data.bvNodeCount, pos = read_u32(data, pos)
-    tile_data.offMeshConCount, pos = read_u32(data, pos)
-    tile_data.offMeshBase, pos = read_u32(data, pos)
-    tile_data.walkableHeight, pos = read_f32(data, pos)
-    tile_data.walkableRadius, pos = read_f32(data, pos)
-    tile_data.walkableClimb, pos = read_f32(data, pos)
-
-    -- bmin (3 floats)
-    tile_data.bmin = {}
-    tile_data.bmin.x, pos = read_f32(data, pos)
-    tile_data.bmin.y, pos = read_f32(data, pos)
-    tile_data.bmin.z, pos = read_f32(data, pos)
-
-    -- bmax (3 floats)
-    tile_data.bmax = {}
-    tile_data.bmax.x, pos = read_f32(data, pos)
-    tile_data.bmax.y, pos = read_f32(data, pos)
-    tile_data.bmax.z, pos = read_f32(data, pos)
-
-    tile_data.bvQuantFactor, pos = read_f32(data, pos)
-
-    -- Parse actual arrays
-    -- Vertices: vertCount * 3 * float
-    tile_data.vertices = {}
-    for i = 1, tile_data.vertCount * 3 do
-        local val
-        val, pos = read_f32(data, pos)
-        if not val then
-            return nil,
-                "Failed to read vertex float at index " .. i .. ", pos: " .. tostring(pos) .. ", data length: " .. #data
-        end
-        table.insert(tile_data.vertices, val)
-    end
-
-    -- Correct block order: Verts → Polys → PolyDetail → DetailVerts → DetailTris → BVNodes → OffMeshCons
-
-    -- Polys: polyCount * dtPoly
-    local bytes_to_read = tile_data.polyCount * POLY_SIZE
-    if pos + bytes_to_read - 1 > #data then
-        return nil, "Data too short for polys. Expected: " .. bytes_to_read .. ", Remaining: " .. (#data - pos + 1)
-    end
-    tile_data.polys_raw = string.sub(data, pos, pos + bytes_to_read - 1)
-    pos = pos + bytes_to_read
-
-    -- PolyDetail: detailMeshCount * dtPolyDetail
-    bytes_to_read = tile_data.detailMeshCount * POLY_DETAIL_SIZE
-    if pos + bytes_to_read - 1 > #data then
-        return nil,
-            "Data too short for poly details. Expected: " .. bytes_to_read .. ", Remaining: " .. (#data - pos + 1)
-    end
-    tile_data.detailMeshes_raw = string.sub(data, pos, pos + bytes_to_read - 1)
-    pos = pos + bytes_to_read
-
-    -- DetailVerts: detailVertCount * 3 * uint32 (packed)
-    tile_data.detailVerts = {}
-
-    -- Dequantization function using bit operations
-    local function dequant16(q, min, max)
-        -- Extract upper 16 bits
-        local upper16 = math.floor(q / 65536) -- equivalent to bit.rshift(q, 16)
-        return min + (upper16 / 65535.0) * (max - min)
-    end
-
-    for i = 1, tile_data.detailVertCount do
-        -- Read 3 uint32 values (12 bytes per vertex)
-        local x, y, z
-        x, pos = read_u32(data, pos)
-        y, pos = read_u32(data, pos)
-        z, pos = read_u32(data, pos)
-
-        -- Store packed values
-        table.insert(tile_data.detailVerts, { x = x, y = y, z = z })
-    end
-
-    -- Helper function to get dequantized world coordinates
-    tile_data.getDetailVertWorld = function(i)
-        local v = tile_data.detailVerts[i]
-        return dequant16(v.x, tile_data.bmin.x, tile_data.bmax.x),
-            dequant16(v.y, tile_data.bmin.y, tile_data.bmax.y),
-            dequant16(v.z, tile_data.bmin.z, tile_data.bmax.z)
-    end
-
-    -- DetailTris: detailTriCount * 4 * uint8
-    bytes_to_read = tile_data.detailTriCount * DETAIL_TRI_SIZE
-    if pos + bytes_to_read - 1 > #data then
-        return nil, "Data too short for detail tris. Expected: " .. bytes_to_read .. ", Remaining: " .. (#data - pos + 1)
-    end
-    tile_data.detailTris_raw = string.sub(data, pos, pos + bytes_to_read - 1)
-    pos = pos + bytes_to_read
-
-    -- BVNodes: bvNodeCount * dtBVNode
-    bytes_to_read = tile_data.bvNodeCount * BVNODE_SIZE
-    if pos + bytes_to_read - 1 > #data then
-        return nil, "Data too short for BV nodes. Expected: " .. bytes_to_read .. ", Remaining: " .. (#data - pos + 1)
-    end
-    tile_data.bvNodes_raw = string.sub(data, pos, pos + bytes_to_read - 1)
-    pos = pos + bytes_to_read
-
-    -- OffMeshCons: offMeshConCount * dtOffMeshConnection
-    bytes_to_read = tile_data.offMeshConCount * OFFMESH_CON_SIZE
-    if pos + bytes_to_read - 1 > #data then
-        return nil,
-            "Data too short for off-mesh connections. Expected: " ..
-            bytes_to_read .. ", Remaining: " .. (#data - pos + 1)
-    end
-    tile_data.offMeshCons_raw = string.sub(data, pos, pos + bytes_to_read - 1)
-    pos = pos + bytes_to_read
-
-    -- Links: maxLinkCount * dtLink
-    bytes_to_read = tile_data.maxLinkCount * LINK_SIZE
-    if pos + bytes_to_read - 1 > #data then
-        return nil, "Data too short for links. Expected: " .. bytes_to_read .. ", Remaining: " .. (#data - pos + 1)
-    end
-    tile_data.links_raw = string.sub(data, pos, pos + bytes_to_read - 1)
-    pos = pos + bytes_to_read
-
-    -- Consistency check: we should have consumed exactly dataSize bytes (minus the MmapTileHeader)
-    local consumed = pos - 21 -- 21 = start position after MmapTileHeader (20 bytes + 1-based indexing)
-    if consumed ~= tile_data.dataSize then
-        return nil,
-            string.format("Size mismatch: consumed %d bytes, expected %d bytes (dataSize)", consumed, tile_data.dataSize)
-    end
-
-    return tile_data
+	return MMap.parse_tile(data)
 end
 
 function MeshParser.parse_tile_file(filename)
-    local data = core.read_data_file(filename)
-    if not data or data == "" then
-        return nil, "Failed to read file: " .. filename
-    end
-
-    return MeshParser.parse_tile(data)
+	return MMap.parse_tile_file(filename)
 end
 
--- Parse links from raw data
-local function parse_links_from_raw(tile_data)
-    local links = {}
-    local LINK_SIZE = 16
+    -- Parsing moved to mmap_decode; no local implementation here
 
-    for i = 1, tile_data.maxLinkCount do
-        local link_start = (i - 1) * LINK_SIZE + 1
-        if link_start + LINK_SIZE - 1 <= #tile_data.links_raw then
-            -- Parse link data (16 bytes per link)
-            -- dtLink structure:
-            -- uint32 ref (4 bytes)
-            -- uint8 dir (1 byte)
-            -- uint8 side (1 byte)
-            -- uint8 bmin (1 byte)
-            -- uint8 bmax (1 byte)
-            -- uint32 userId (4 bytes)
-            -- Padding (4 bytes)
-
-            local pos = link_start
-            local ref = string.byte(tile_data.links_raw, pos) +
-                (string.byte(tile_data.links_raw, pos + 1) * 256) +
-                (string.byte(tile_data.links_raw, pos + 2) * 65536) +
-                (string.byte(tile_data.links_raw, pos + 3) * 16777216)
-            pos = pos + 4
-
-            local dir = string.byte(tile_data.links_raw, pos)
-            pos = pos + 1
-
-            local side = string.byte(tile_data.links_raw, pos)
-            pos = pos + 1
-
-            local bmin = string.byte(tile_data.links_raw, pos)
-            pos = pos + 1
-
-            local bmax = string.byte(tile_data.links_raw, pos)
-            pos = pos + 1
-
-            local userId = string.byte(tile_data.links_raw, pos) +
-                (string.byte(tile_data.links_raw, pos + 1) * 256) +
-                (string.byte(tile_data.links_raw, pos + 2) * 65536) +
-                (string.byte(tile_data.links_raw, pos + 3) * 16777216)
-
-            table.insert(links, {
-                id = i,
-                ref = ref,
-                dir = dir,
-                side = side,
-                bmin = bmin,
-                bmax = bmax,
-                userId = userId
-            })
-        end
-    end
-
-    return links
-end
-
--- Parse detail meshes from raw data
-local function parse_detail_meshes_from_raw(tile_data)
-    local detail_meshes = {}
-    local POLY_DETAIL_SIZE = 12
-
-    for i = 1, tile_data.detailMeshCount do
-        local mesh_start = (i - 1) * POLY_DETAIL_SIZE + 1
-        if mesh_start + POLY_DETAIL_SIZE - 1 <= #tile_data.detailMeshes_raw then
-            -- Parse detail mesh data (12 bytes per mesh)
-            -- dtPolyDetail structure:
-            -- uint32 vertBase (4 bytes)
-            -- uint32 triBase (4 bytes)
-            -- uint8 vertCount (1 byte)
-            -- uint8 triCount (1 byte)
-            -- uint8 flags (1 byte)
-            -- Padding (1 byte)
-
-            local pos = mesh_start
-            local vertBase = string.byte(tile_data.detailMeshes_raw, pos) +
-                (string.byte(tile_data.detailMeshes_raw, pos + 1) * 256) +
-                (string.byte(tile_data.detailMeshes_raw, pos + 2) * 65536) +
-                (string.byte(tile_data.detailMeshes_raw, pos + 3) * 16777216)
-            pos = pos + 4
-
-            local triBase = string.byte(tile_data.detailMeshes_raw, pos) +
-                (string.byte(tile_data.detailMeshes_raw, pos + 1) * 256) +
-                (string.byte(tile_data.detailMeshes_raw, pos + 2) * 65536) +
-                (string.byte(tile_data.detailMeshes_raw, pos + 3) * 16777216)
-            pos = pos + 4
-
-            local vertCount = string.byte(tile_data.detailMeshes_raw, pos)
-            pos = pos + 1
-
-            local triCount = string.byte(tile_data.detailMeshes_raw, pos)
-            pos = pos + 1
-
-            local flags = string.byte(tile_data.detailMeshes_raw, pos)
-
-            table.insert(detail_meshes, {
-                id = i,
-                vertBase = vertBase,
-                triBase = triBase,
-                vertCount = vertCount,
-                triCount = triCount,
-                flags = flags
-            })
-        end
-    end
-
-    return detail_meshes
-end
-
--- Parse detail triangles from raw data
-local function parse_detail_tris_from_raw(tile_data)
-    local detail_tris = {}
-    local DETAIL_TRI_SIZE = 4
-
-    for i = 1, tile_data.detailTriCount do
-        local tri_start = (i - 1) * DETAIL_TRI_SIZE + 1
-        if tri_start + DETAIL_TRI_SIZE - 1 <= #tile_data.detailTris_raw then
-            -- Parse detail triangle data (4 bytes per triangle)
-            -- dtDetailTri structure:
-            -- uint8 vertIndex[3] (3 bytes)
-            -- uint8 flags (1 byte)
-
-            local pos = tri_start
-            local vertIndex0 = string.byte(tile_data.detailTris_raw, pos)
-            pos = pos + 1
-
-            local vertIndex1 = string.byte(tile_data.detailTris_raw, pos)
-            pos = pos + 1
-
-            local vertIndex2 = string.byte(tile_data.detailTris_raw, pos)
-            pos = pos + 1
-
-            local flags = string.byte(tile_data.detailTris_raw, pos)
-
-            table.insert(detail_tris, {
-                id = i,
-                vertIndex0 = vertIndex0,
-                vertIndex1 = vertIndex1,
-                vertIndex2 = vertIndex2,
-                flags = flags
-            })
-        end
-    end
-
-    return detail_tris
-end
-
--- Parse BV nodes from raw data
-local function parse_bv_nodes_from_raw(tile_data)
-    local bv_nodes = {}
-    local BVNODE_SIZE = 16
-
-    for i = 1, tile_data.bvNodeCount do
-        local node_start = (i - 1) * BVNODE_SIZE + 1
-        if node_start + BVNODE_SIZE - 1 <= #tile_data.bvNodes_raw then
-            -- Parse BV node data (16 bytes per node)
-            -- dtBVNode structure:
-            -- int16 bmin[3] (6 bytes)
-            -- int16 bmax[3] (6 bytes)
-            -- int32 i (4 bytes)
-
-            local pos = node_start
-            local bmin0 = string.byte(tile_data.bvNodes_raw, pos) +
-                (string.byte(tile_data.bvNodes_raw, pos + 1) * 256)
-            -- Convert from unsigned to signed 16-bit
-            if bmin0 >= 32768 then bmin0 = bmin0 - 65536 end
-            pos = pos + 2
-
-            local bmin1 = string.byte(tile_data.bvNodes_raw, pos) +
-                (string.byte(tile_data.bvNodes_raw, pos + 1) * 256)
-            -- Convert from unsigned to signed 16-bit
-            if bmin1 >= 32768 then bmin1 = bmin1 - 65536 end
-            pos = pos + 2
-
-            local bmin2 = string.byte(tile_data.bvNodes_raw, pos) +
-                (string.byte(tile_data.bvNodes_raw, pos + 1) * 256)
-            -- Convert from unsigned to signed 16-bit
-            if bmin2 >= 32768 then bmin2 = bmin2 - 65536 end
-            pos = pos + 2
-
-            local bmax0 = string.byte(tile_data.bvNodes_raw, pos) +
-                (string.byte(tile_data.bvNodes_raw, pos + 1) * 256)
-            -- Convert from unsigned to signed 16-bit
-            if bmax0 >= 32768 then bmax0 = bmax0 - 65536 end
-            pos = pos + 2
-
-            local bmax1 = string.byte(tile_data.bvNodes_raw, pos) +
-                (string.byte(tile_data.bvNodes_raw, pos + 1) * 256)
-            -- Convert from unsigned to signed 16-bit
-            if bmax1 >= 32768 then bmax1 = bmax1 - 65536 end
-            pos = pos + 2
-
-            local bmax2 = string.byte(tile_data.bvNodes_raw, pos) +
-                (string.byte(tile_data.bvNodes_raw, pos + 1) * 256)
-            -- Convert from unsigned to signed 16-bit
-            if bmax2 >= 32768 then bmax2 = bmax2 - 65536 end
-            pos = pos + 2
-
-            local nodeId = string.byte(tile_data.bvNodes_raw, pos) +
-                (string.byte(tile_data.bvNodes_raw, pos + 1) * 256) +
-                (string.byte(tile_data.bvNodes_raw, pos + 2) * 65536) +
-                (string.byte(tile_data.bvNodes_raw, pos + 3) * 16777216)
-
-            table.insert(bv_nodes, {
-                id = i,
-                bmin = { bmin0, bmin1, bmin2 },
-                bmax = { bmax0, bmax1, bmax2 },
-                nodeId = nodeId
-            })
-        end
-    end
-
-    return bv_nodes
-end
-
--- Parse polygons from raw data
-local function parse_polys_from_raw(tile_data)
-    local polys = {}
-    local POLY_SIZE = 32
-    
-    for i = 1, tile_data.polyCount do
-        local poly_start = (i - 1) * POLY_SIZE + 1
-        if poly_start + POLY_SIZE - 1 <= #tile_data.polys_raw then
-            -- Parse polygon data (32 bytes per polygon)
-            -- dtPoly structure:
-            -- uint32 firstLink (4 bytes) - skip
-            -- uint16 verts[6] (12 bytes) - vertex indices
-            -- uint16 neis[6] (12 bytes) - neighbor indices - skip
-            -- uint16 flags (2 bytes) - skip
-            -- uint8 vertCount (1 byte)
-            -- uint8 areaAndtype (1 byte) - skip
-            
-            local pos = poly_start + 4 -- Skip firstLink
-            
-            -- Parse vertex indices (6 x uint16)
-            local verts = {}
-            for j = 1, 6 do
-                local low_byte = string.byte(tile_data.polys_raw, pos)
-                local high_byte = string.byte(tile_data.polys_raw, pos + 1)
-                local vertex_index = low_byte + (high_byte * 256)
-                table.insert(verts, vertex_index)
-                pos = pos + 2
-            end
-            
-            -- Neighbor data (dtPoly.neis[6])
-            local neis = {}
-            for j = 1, 6 do
-                local low = string.byte(tile_data.polys_raw, pos)
-                local high = string.byte(tile_data.polys_raw, pos + 1)
-                local nei = low + high * 256
-                neis[j] = nei
-                pos = pos + 2
-            end
-            -- flags (uint16)
-            local flags_low = string.byte(tile_data.polys_raw, pos)
-            local flags_high = string.byte(tile_data.polys_raw, pos + 1)
-            local flags = flags_low + flags_high * 256
-            pos = pos + 2
-            
-            -- Parse vertCount
-            local vertCount = string.byte(tile_data.polys_raw, pos)
-            
-            -- Parse areaAndtype
-            local areaAndtype = string.byte(tile_data.polys_raw, pos + 1)
-
-            table.insert(polys, {
-                id = i,
-                verts = verts,
-                neis = neis,
-                vertCount = vertCount,
-                flags = flags,
-                areaAndtype = areaAndtype
-            })
-        end
-    end
-    
-    return polys
-end
-
--- Parse off-mesh connections from raw data
-local function parse_off_mesh_cons_from_raw(tile_data)
-    local off_mesh_cons = {}
-    local OFFMESH_CON_SIZE = 32
-
-    for i = 1, tile_data.offMeshConCount do
-        local con_start = (i - 1) * OFFMESH_CON_SIZE + 1
-        if con_start + OFFMESH_CON_SIZE - 1 <= #tile_data.offMeshCons_raw then
-            -- Parse off-mesh connection data (32 bytes per connection)
-            -- dtOffMeshConnection structure:
-            -- float pos[6] (24 bytes)
-            -- float radius (4 bytes)
-            -- unsigned short flags (2 bytes)
-            -- unsigned char side (1 byte)
-            -- unsigned char userId (1 byte)
-
-            local pos = con_start
-
-            -- Parse positions (6 floats)
-            local positions = {}
-            for j = 1, 6 do
-                local uint_val = string.byte(tile_data.offMeshCons_raw, pos) +
-                    (string.byte(tile_data.offMeshCons_raw, pos + 1) * 256) +
-                    (string.byte(tile_data.offMeshCons_raw, pos + 2) * 65536) +
-                    (string.byte(tile_data.offMeshCons_raw, pos + 3) * 16777216)
-
-                -- Convert uint32 to float (IEEE 754)
-                local float_val = 0.0
-                if uint_val ~= 0 then
-                    local sign = (uint_val >= 0x80000000) and -1 or 1
-                    local exponent = (math.floor(uint_val / 0x800000) % 0x100) - 127
-                    local mantissa = (uint_val % 0x800000) / 0x800000 + 1
-                    float_val = sign * mantissa * (2 ^ exponent)
-                end
-
-                table.insert(positions, float_val)
-                pos = pos + 4
-            end
-
-            -- Parse radius (float)
-            local radius_uint = string.byte(tile_data.offMeshCons_raw, pos) +
-                (string.byte(tile_data.offMeshCons_raw, pos + 1) * 256) +
-                (string.byte(tile_data.offMeshCons_raw, pos + 2) * 65536) +
-                (string.byte(tile_data.offMeshCons_raw, pos + 3) * 16777216)
-
-            local radius = 0.0
-            if radius_uint ~= 0 then
-                local sign = (radius_uint >= 0x80000000) and -1 or 1
-                local exponent = (math.floor(radius_uint / 0x800000) % 0x100) - 127
-                local mantissa = (radius_uint % 0x800000) / 0x800000 + 1
-                radius = sign * mantissa * (2 ^ exponent)
-            end
-            pos = pos + 4
-
-            -- Parse flags (unsigned short)
-            local flags = string.byte(tile_data.offMeshCons_raw, pos) +
-                (string.byte(tile_data.offMeshCons_raw, pos + 1) * 256)
-            pos = pos + 2
-
-            -- Parse side (unsigned char)
-            local side = string.byte(tile_data.offMeshCons_raw, pos)
-            pos = pos + 1
-
-            -- Parse userId (unsigned char)
-            local userId = string.byte(tile_data.offMeshCons_raw, pos)
-
-            table.insert(off_mesh_cons, {
-                id = i,
-                pos = positions,
-                radius = radius,
-                flags = flags,
-                side = side,
-                userId = userId
-            })
-        end
-    end
-
-    return off_mesh_cons
-end
+-- Legacy raw parsing helpers removed (parsing now handled in mmap_decode.lua)
 
 -- Extract polygons from raw tile data
 local function extract_polygons_from_tile(tile_data)
     local polygons = {}
 
-    if not tile_data.polys_raw or tile_data.polyCount == 0 then
+    if not tile_data or not tile_data.polys or tile_data.polyCount == 0 then
         return polygons
     end
 
-    -- Use the structured parse to get vertCount and area/type/flags
-    local polys = parse_polys_from_raw(tile_data)
+    -- Use structured fields from mmap_decode
+    local polys = tile_data.polys or {}
+    local links = tile_data.links or {}
+
+    -- Build a map from vertex index to world position for computing edge midpoints
+    local function base_vert_world(idx)
+        local pos = (idx - 1) * 3 + 1
+        if pos + 2 > #tile_data.vertices then return nil end
+        local mx, my, mz = tile_data.vertices[pos], tile_data.vertices[pos + 1], tile_data.vertices[pos + 2]
+        local gx, gy, gz = toGameCoordinates(mx, my, mz)
+        return { x = gx, y = gy, z = gz }
+    end
+
+    -- Pre-collect links per polygon edge: ref encodes neighbor polygon index; bmin/bmax give sub-edge range
+    local links_by_poly = {}
+    for _, l in ipairs(links) do
+        -- dir is edge index (0..5), side indicates external tile side
+        local poly_id = l.ref -- In mmaps this is a poly ref; in single-tile use as neighbor id fallback
+        -- We'll attach by iterating all polys and storing link ranges on their edges
+        if l.dir and l.dir >= 0 and l.dir <= 5 then
+            links_by_poly[l.dir] = links_by_poly[l.dir] or {}
+        end
+    end
 
     for _, poly in ipairs(polys) do
         -- Filter to ground polys only: type is stored in the top 2 bits (area low 6 bits)
@@ -628,7 +102,10 @@ local function extract_polygons_from_tile(tile_data)
                     vertex_count = #vertices,
                     flags = poly.flags,
                     areaAndtype = poly.areaAndtype,
-                    neis = poly.neis
+                    neis = poly.neis,
+                    tile = tile_data,
+                    -- Keep raw vertex indices to compute sub-edge midpoints if future link data is used
+                    raw_verts = poly.verts
                 })
             end
         end
@@ -711,6 +188,9 @@ function TileManager:new()
         -- Active world identifier (to reset mesh when changing instance/continent)
         active_instance_id = nil,
         tiles_dirty = false,           -- whether merged graph needs rebuild
+        -- Build/versioning
+        graph_build_id = 0,            -- increments when a merged graph build completes
+        path_graph_id = nil,           -- graph id the current path was computed against
         -- Profiling configuration
         profile_enabled = true,
         profile_threshold_ms = 2.0,    -- only log sections slower than this
@@ -751,6 +231,14 @@ function TileManager:new()
         debug_texts = {},
         -- Visualization control (disable in production)
         allow_visualization = false
+        ,
+        -- Detour-strict behavior: funnel-only, no extra smoothing
+        strict_detour_mode = true
+        ,
+        -- Corner rounding inside corridor for natural turns
+        round_corners_enabled = true,
+        min_turn_radius = 2.8,
+        round_steps = 4
     }
     setmetatable(obj, self)
     self.__index = self
@@ -817,9 +305,13 @@ function TileManager:start()
         local now_ms = core.time() or 0
         local force_draw = self.path_draw_until_ms and now_ms < self.path_draw_until_ms
         if self.show_path or force_draw then
-            self:draw_path()
-            -- Also draw all polygons that form the current path corridor
-            self:draw_path_polygons()
+            if self.draw_corridor_layers_only then
+                self:draw_path_corridor_layers()
+            else
+                self:draw_path()
+                -- Also draw all polygons that form the current path corridor
+                self:draw_path_polygons()
+            end
         end
         -- Gated debug/mesh visualization
         if not self.allow_visualization then return end
@@ -985,9 +477,9 @@ function TileManager:ensure_neighbor_tiles_loaded(cx, cy, radius, budget_ms_over
                 -- Start incremental navmesh build job
                 self.navmesh = { vertices = {}, triangles = {} }
                 local tile = cent.tile_data
-                local polys = parse_polys_from_raw(tile)
-                local detail_tris = parse_detail_tris_from_raw(tile)
-                local detail_meshes = parse_detail_meshes_from_raw(tile)
+                local polys = tile.polys or {}
+                local detail_tris = tile.detailTris or {}
+                local detail_meshes = tile.detailMeshes or {}
                 local base_vertices = {}
                 for i = 0, tile.vertCount - 1 do
                     local x = tile.vertices[i * 3 + 1]
@@ -1257,7 +749,7 @@ function TileManager:schedule_incremental_graph_build()
                         end
                     end
                 end
-                -- Always also build geometric adjacency to connect across tiles/layers
+                -- Always also build geometric adjacency to connect within tiles and across tiles/layers
                 if poly.coords and #poly.coords >= 2 then
                     for j = 1, #poly.coords do
                         local a = poly.coords[j]
@@ -1306,6 +798,8 @@ function TileManager:schedule_incremental_graph_build()
         if self.profile_enabled and build_ms > (self.profile_threshold_ms * 2) then
             core.log(string.format("[Perf] graph build total=%.2fms (#polys=%d)", build_ms, #merged))
         end
+        -- Bump build id to invalidate outdated path/poly ids computed on older graphs
+        self.graph_build_id = (self.graph_build_id or 0) + 1
     end)
 end
 
@@ -1399,12 +893,10 @@ function TileManager:create_navmesh(tile_data)
         detail_vertices[i - 1] = { x = gx, y = gy, z = gz } -- zero-based
     end
 
-    -- Parse dtPoly entries to obtain polygon vertex indices and vertCount
-    local polys = parse_polys_from_raw(tile_data)
-
-    -- Parse detail triangles and meshes
-    local detail_tris = parse_detail_tris_from_raw(tile_data)
-    local detail_meshes = parse_detail_meshes_from_raw(tile_data)
+    -- Use structured fields
+    local polys = tile_data.polys or {}
+    local detail_tris = tile_data.detailTris or {}
+    local detail_meshes = tile_data.detailMeshes or {}
 
     local triangles_added = 0
     local triangles_skipped = 0
@@ -1614,7 +1106,7 @@ function TileManager:build_graph(polygons)
                 end
             end
         end
-        -- Always also do geometric adjacency to connect across tiles/layers
+        -- Geometric adjacency to connect across tiles/layers (until link.ref decoding is implemented)
         if poly.coords and #poly.coords >= 2 then
             for j = 1, #poly.coords do
                 local a = poly.coords[j]
@@ -1675,6 +1167,124 @@ local function path_total_length(points)
         sum = sum + math.sqrt(dx * dx + dy * dy + dz * dz)
     end
     return sum
+end
+
+-- Forward declaration for linter: defined later in the file
+local path_inside_corridor
+local clamp_point_to_polygon
+local choose_owner_poly_for_point
+local sample_z_from_detail
+
+-- Geometry helpers for path correction
+local function nearest_point_on_segment(a, b, p)
+    local ax, ay, az = a.x or 0, a.y or 0, a.z or 0
+    local bx, by, bz = b.x or 0, b.y or 0, b.z or 0
+    local px, py, pz = p.x or 0, p.y or 0, p.z or 0
+    local abx, aby, abz = bx - ax, by - ay, bz - az
+    local apx, apy, apz = px - ax, py - ay, pz - az
+    local ab2 = abx * abx + aby * aby + abz * abz
+    if ab2 <= 1e-9 then return { x = ax, y = ay, z = az }, 0 end
+    local t = (apx * abx + apy * aby + apz * abz) / ab2
+    if t < 0 then t = 0 elseif t > 1 then t = 1 end
+    return { x = ax + abx * t, y = ay + aby * t, z = az + abz * t }, t
+end
+
+local function nearest_point_on_polyline(polyline, p)
+    if not polyline or #polyline < 2 then return nil end
+    local best_pt, best_d2 = nil, 1e30
+    for i = 2, #polyline do
+        local q, _ = nearest_point_on_segment(polyline[i - 1], polyline[i], p)
+        local dx = (q.x or 0) - (p.x or 0)
+        local dy = (q.y or 0) - (p.y or 0)
+        local dz = (q.z or 0) - (p.z or 0)
+        local d2 = dx * dx + dy * dy + dz * dz
+        if d2 < best_d2 then best_d2 = d2; best_pt = q end
+    end
+    return best_pt
+end
+
+-- Move points outside the corridor back towards the original safe path
+local function constrain_path_to_corridor(points, safe_points, poly_ids, poly_lookup)
+    if not points or #points == 0 then return points end
+    local result = {}
+    for i = 1, #points do
+        local p = points[i]
+        if path_inside_corridor({ p }, poly_ids, poly_lookup) then
+            result[i] = p
+        else
+            local anchor = nearest_point_on_polyline(safe_points, p) or p
+            -- Binary search along p->anchor to find a point inside the corridor
+            local lo, hi = 0.0, 1.0
+            local found = p
+            for _ = 1, 10 do
+                local t = 0.5 * (lo + hi)
+                local q = {
+                    x = p.x + (anchor.x - p.x) * t,
+                    y = p.y + (anchor.y - p.y) * t,
+                    z = p.z + (anchor.z - p.z) * t,
+                }
+                if path_inside_corridor({ q }, poly_ids, poly_lookup) then
+                    found = q
+                    hi = t
+                else
+                    lo = t
+                end
+            end
+            result[i] = found
+        end
+    end
+    return result
+end
+
+-- Round sharp corners within corridor with constant-radius arcs (keeps inside polys)
+local function round_corners_in_corridor(points, poly_ids, poly_lookup, turn_radius, steps)
+    if not points or #points < 3 then return points end
+    local r = math.max(0.1, turn_radius or 2.5)
+    local k = math.max(2, math.floor(steps or 4))
+    local out = { points[1] }
+    for i = 2, #points - 1 do
+        local p0, p1, p2 = points[i - 1], points[i], points[i + 1]
+        local v1x, v1y = p1.x - p0.x, p1.y - p0.y
+        local v2x, v2y = p2.x - p1.x, p2.y - p1.y
+        local len1 = math.sqrt(v1x * v1x + v1y * v1y)
+        local len2 = math.sqrt(v2x * v2x + v2y * v2y)
+        if len1 < 1e-3 or len2 < 1e-3 then
+            out[#out + 1] = p1
+        else
+            v1x, v1y = v1x / len1, v1y / len1
+            v2x, v2y = v2x / len2, v2y / len2
+            local dot = v1x * v2x + v1y * v2y
+            dot = math.max(-1, math.min(1, dot))
+            local ang = math.acos(dot)
+            if ang < math.rad(135) then
+                local t1 = math.min(len1 * 0.5, r)
+                local t2 = math.min(len2 * 0.5, r)
+                local a = { x = p1.x - v1x * t1, y = p1.y - v1y * t1, z = p1.z }
+                local b = { x = p1.x + v2x * t2, y = p1.y + v2y * t2, z = p1.z }
+                -- Sweep arc from a to b around p1
+                for s = 1, k do
+                    local t = s / (k + 1)
+                    local tx = a.x * (1 - t) + b.x * t
+                    local ty = a.y * (1 - t) + b.y * t
+                    local cand = { x = tx, y = ty, z = p1.z }
+                    -- Clamp candidate into corridor and project Z
+                    local owner = choose_owner_poly_for_point and choose_owner_poly_for_point(cand, poly_ids, poly_lookup) or nil
+                    if owner then
+                        cand = clamp_point_to_polygon(cand, owner)
+                        if owner.tile then
+                            local dz = sample_z_from_detail(owner.tile, { id = owner.id, verts = owner.raw_verts, vertCount = owner.vertex_count }, cand.x, cand.y)
+                            if dz then cand.z = dz end
+                        end
+                    end
+                    out[#out + 1] = cand
+                end
+            else
+                out[#out + 1] = p1
+            end
+        end
+    end
+    out[#out + 1] = points[#points]
+    return out
 end
 
 function TileManager:a_star(start_id, goal_id)
@@ -1895,10 +1505,52 @@ function TileManager:compute_path_to_saved()
     local alt_nodes = {}
     for idx = 1, math.min(10, #alt_sets) do
         local ids = alt_sets[idx]
-        local corridor = self:build_portal_center_path(ids)
-        if self.smooth_path_enabled then
+        -- Prefer funnel path; fallback to center corridor if extraction fails
+        local safe_corridor = self:build_portal_center_path(ids)
+        local funnel = self:build_funnel_path(ids, start_pos, self.saved_position)
+        local corridor = funnel and path_inside_corridor(funnel, ids, self.poly_lookup) and funnel or safe_corridor
+        if (not self.strict_detour_mode) and self.smooth_path_enabled then
+            local raw_before = corridor
             corridor = self:simplify_path(corridor, 1.8)
             corridor = self:chaikin_smooth(corridor, 2)
+            if (not corridor) or (#corridor < 3) then
+                corridor = raw_before
+            elseif not path_inside_corridor(corridor, ids, self.poly_lookup) then
+                corridor = constrain_path_to_corridor(corridor, safe_corridor, ids, self.poly_lookup)
+            end
+        end
+        -- Project path nodes onto polygon planes to ensure they lie on the flat corridor surface
+        local projected = {}
+        for i = 1, #corridor do
+            local p = corridor[i]
+            -- Prefer containing polygon with closest plane-z; fallback to nearest edge among ids
+            local owner = choose_owner_poly_for_point and choose_owner_poly_for_point(p, ids, self.poly_lookup) or nil
+            if not owner then
+                local best_d2
+                for _, pid in ipairs(ids) do
+                    local poly = self.poly_lookup[pid]
+                    if poly and poly.coords and #poly.coords >= 2 then
+                        for j = 1, #poly.coords do
+                            local a = poly.coords[j]
+                            local b = poly.coords[(j % #poly.coords) + 1]
+                            local q, _ = nearest_point_on_segment(a, b, p)
+                            local dx, dy = (q.x - p.x), (q.y - p.y)
+                            local d2 = dx * dx + dy * dy
+                            if not best_d2 or d2 < best_d2 then best_d2 = d2; owner = poly end
+                        end
+                    end
+                end
+            end
+            local snapped = owner and clamp_point_to_polygon(p, owner) or p
+            if owner and owner.tile then
+                local dz = sample_z_from_detail(owner.tile, { id = owner.id, verts = owner.raw_verts, vertCount = owner.vertex_count }, snapped.x, snapped.y)
+                if dz then snapped.z = dz end
+            end
+            projected[i] = snapped
+        end
+        corridor = projected
+        if self.round_corners_enabled and self.strict_detour_mode then
+            corridor = round_corners_in_corridor(corridor, ids, self.poly_lookup, self.min_turn_radius, self.round_steps)
         end
         alt_nodes[#alt_nodes + 1] = corridor
         -- Score by actual path distance (prefer shortest physical distance)
@@ -1910,6 +1562,7 @@ function TileManager:compute_path_to_saved()
     self.alt_paths_nodes = alt_nodes
     self.path_nodes = best_nodes
     self.path_poly_ids = best_polys
+    self.path_graph_id = self.graph_build_id
     dlog(self, "Path with " .. #self.path_nodes .. " nodes ready")
     -- Ensure path is visible without starting movement
     self.show_path = true
@@ -1938,18 +1591,64 @@ function TileManager:path_from_to(start_pos, end_pos)
     if not start_id or not goal_id then return nil end
     local poly_ids = self:a_star(start_id, goal_id)
     if not poly_ids or #poly_ids == 0 then return nil end
-    local corridor = self:build_portal_center_path(poly_ids)
-    if self.smooth_path_enabled then
+    local safe_corridor = self:build_portal_center_path(poly_ids)
+    local funnel = self:build_funnel_path(poly_ids, start_pos, end_pos)
+    local corridor = funnel and path_inside_corridor(funnel, poly_ids, self.poly_lookup) and funnel or safe_corridor
+    if (not self.strict_detour_mode) and self.smooth_path_enabled then
+        local raw_before = corridor
         corridor = self:simplify_path(corridor, 1.8)
         corridor = self:chaikin_smooth(corridor, 2)
+        if (not corridor) or (#corridor < 3) then
+            corridor = raw_before
+        elseif not path_inside_corridor(corridor, poly_ids, self.poly_lookup) then
+            corridor = constrain_path_to_corridor(corridor, safe_corridor, poly_ids, self.poly_lookup)
+        end
     end
-    -- Re-run a local refinement: pick shorter among raw corridor and a lightly re-sampled path
-    -- (safeguard against right-angle artifacts when crossing tiles)
+    -- Project nodes onto polygon planes for final path
+    do
+        local projected = {}
+        for i = 1, #corridor do
+            local p = corridor[i]
+            local owner = choose_owner_poly_for_point and choose_owner_poly_for_point(p, poly_ids, self.poly_lookup) or nil
+            if not owner then
+                local best_d2
+                for _, pid in ipairs(poly_ids) do
+                    local poly = self.poly_lookup[pid]
+                    if poly and poly.coords and #poly.coords >= 2 then
+                        for j = 1, #poly.coords do
+                            local a = poly.coords[j]
+                            local b = poly.coords[(j % #poly.coords) + 1]
+                            local q, _ = nearest_point_on_segment(a, b, p)
+                            local dx, dy = (q.x - p.x), (q.y - p.y)
+                            local d2 = dx * dx + dy * dy
+                            if not best_d2 or d2 < best_d2 then best_d2 = d2; owner = poly end
+                        end
+                    end
+                end
+            end
+            local snapped = owner and clamp_point_to_polygon(p, owner) or p
+            if owner and owner.tile then
+                local dz = sample_z_from_detail(owner.tile, { id = owner.id, verts = owner.raw_verts, vertCount = owner.vertex_count }, snapped.x, snapped.y)
+                if dz then snapped.z = dz end
+            end
+            projected[i] = snapped
+        end
+        corridor = projected
+    end
+    if self.round_corners_enabled and self.strict_detour_mode then
+        corridor = round_corners_in_corridor(corridor, poly_ids, self.poly_lookup, self.min_turn_radius, self.round_steps)
+    end
+    -- In strict Detour mode, do not apply extra re-sampling preference
     local best = corridor
-    local alt = self:simplify_path(corridor, 1.2)
-    if alt and #alt >= 2 and path_total_length(alt) < path_total_length(best) then
-        best = alt
+    if not self.strict_detour_mode then
+        -- Re-run a local refinement: pick shorter among raw corridor and a lightly re-sampled path
+        -- (safeguard against right-angle artifacts when crossing tiles)
+        local alt = self:simplify_path(corridor, 1.2)
+        if alt and #alt >= 2 and path_total_length(alt) < path_total_length(best) then
+            best = alt
+        end
     end
+    self.path_graph_id = self.graph_build_id
     return best
 end
 
@@ -2349,6 +2048,292 @@ function TileManager:build_portal_center_path(poly_ids)
     return points
 end
 
+-- Build a path using the funnel (string-pulling) algorithm across polygon portals
+function TileManager:build_funnel_path(poly_ids, start_pos, end_pos)
+    if not poly_ids or #poly_ids == 0 then return nil end
+    local id_to_poly = self.poly_lookup or {}
+
+    local function quant(v, s)
+        local kx = math.floor((v.x or 0) / s + 0.5)
+        local ky = math.floor((v.y or 0) / s + 0.5)
+        return tostring(kx) .. "," .. tostring(ky)
+    end
+    local function build_portals()
+        local portals = {}
+        local s_match = 0.35
+        for i = 1, #poly_ids - 1 do
+            local a = id_to_poly[poly_ids[i]]
+            local b = id_to_poly[poly_ids[i + 1]]
+            if not a or not b or not a.coords or not b.coords then return nil end
+            -- map of quantized coord -> vector from A
+            local mapA = {}
+            for _, ca in ipairs(a.coords) do mapA[quant(ca, s_match)] = ca end
+            local shared = {}
+            for _, cb in ipairs(b.coords) do
+                local pa = mapA[quant(cb, s_match)]
+                if pa then
+                    shared[#shared + 1] = { a = pa, b = cb }
+                    if #shared >= 2 then break end
+                end
+            end
+            if #shared < 2 then return nil end
+            -- order as left/right relative to the direction from a.center to b.center
+            local p1 = shared[1].a
+            local p2 = shared[2].a
+            -- 2D orientation test
+            local dx = (b.center.x or 0) - (a.center.x or 0)
+            local dy = (b.center.y or 0) - (a.center.y or 0)
+            local cross = dx * ((p2.y or 0) - (a.center.y or 0)) - dy * ((p2.x or 0) - (a.center.x or 0))
+            local left_pt, right_pt
+            if cross > 0 then
+                left_pt, right_pt = p1, p2
+            else
+                left_pt, right_pt = p2, p1
+            end
+            portals[#portals + 1] = { left = left_pt, right = right_pt }
+        end
+        return portals
+    end
+
+    local function tri_area2(a, b, c)
+        return (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x)
+    end
+    local function string_pull(portals, startp, endp)
+        local pts = {}
+        local apex = { x = startp.x, y = startp.y, z = startp.z }
+        local left = { x = startp.x, y = startp.y, z = startp.z }
+        local right = { x = startp.x, y = startp.y, z = startp.z }
+        local apex_index, left_index, right_index = 0, 0, 0
+        table.insert(pts, { x = startp.x, y = startp.y, z = startp.z })
+
+        for i = 1, #portals do
+            local p = portals[i]
+            local left_p = p.left
+            local right_p = p.right
+
+            -- update right vertex
+            if tri_area2(apex, right, right_p) <= 0 then
+                if apex.x == right.x and apex.y == right.y or tri_area2(apex, left, right_p) > 0 then
+                    right = { x = right_p.x, y = right_p.y, z = right_p.z }
+                    right_index = i
+                else
+                    -- tighten funnel at left
+                    table.insert(pts, { x = left.x, y = left.y, z = left.z })
+                    apex = { x = left.x, y = left.y, z = left.z }
+                    apex_index = left_index
+                    left = { x = apex.x, y = apex.y, z = apex.z }
+                    right = { x = apex.x, y = apex.y, z = apex.z }
+                    left_index = apex_index
+                    right_index = apex_index
+                    i = apex_index -- continue from the apex portal
+                end
+            end
+
+            -- update left vertex
+            if tri_area2(apex, left, left_p) >= 0 then
+                if apex.x == left.x and apex.y == left.y or tri_area2(apex, right, left_p) < 0 then
+                    left = { x = left_p.x, y = left_p.y, z = left_p.z }
+                    left_index = i
+                else
+                    -- tighten funnel at right
+                    table.insert(pts, { x = right.x, y = right.y, z = right.z })
+                    apex = { x = right.x, y = right.y, z = right.z }
+                    apex_index = right_index
+                    left = { x = apex.x, y = apex.y, z = apex.z }
+                    right = { x = apex.x, y = apex.y, z = apex.z }
+                    left_index = apex_index
+                    right_index = apex_index
+                    i = apex_index
+                end
+            end
+        end
+
+        table.insert(pts, { x = endp.x, y = endp.y, z = endp.z })
+        return pts
+    end
+
+    local portals = build_portals()
+    if not portals or #portals == 0 then return nil end
+    local path = string_pull(portals, start_pos or id_to_poly[poly_ids[1]].center, end_pos or id_to_poly[poly_ids[#poly_ids]].center)
+    return path
+end
+
+-- Point-in-polygon (XY) test using ray casting; z ignored for stability
+local function point_in_polygon_xy(pt, coords)
+    if not coords or #coords < 3 then return false end
+    local inside = false
+    local x, y = pt.x or 0, pt.y or 0
+    local n = #coords
+    for i = 1, n do
+        local j = (i % n) + 1
+        local xi, yi = coords[i].x or 0, coords[i].y or 0
+        local xj, yj = coords[j].x or 0, coords[j].y or 0
+        local intersect = ((yi > y) ~= (yj > y)) and (x < ((xj - xi) * (y - yi) / (((yj - yi) ~= 0) and (yj - yi) or 1e-9) + xi))
+        if intersect then inside = not inside end
+    end
+    return inside
+end
+
+-- Compute z on the polygon plane for XY position using first triangle fan
+local function compute_plane_z(coords, x, y)
+    if not coords or #coords < 3 then return nil end
+    local a = coords[1]
+    local b = coords[2]
+    local c = coords[3]
+    local ux, uy, uz = b.x - a.x, b.y - a.y, b.z - a.z
+    local vx, vy, vz = c.x - a.x, c.y - a.y, c.z - a.z
+    local nx, ny, nz = uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx
+    if math.abs(nz) < 1e-9 then return a.z end
+    -- Plane: n•(p - a) = 0 -> nx(x-ax) + ny(y-ay) + nz(z-az) = 0
+    local z = a.z - (nx * (x - a.x) + ny * (y - a.y)) / nz
+    return z
+end
+
+-- Clamp a point to be inside a polygon on XY and adjust Z to plane
+function clamp_point_to_polygon(p, poly)
+    if not poly or not poly.coords or #poly.coords < 3 then return p end
+    local x, y = p.x, p.y
+    if not point_in_polygon_xy(p, poly.coords) then
+        -- Simple clamp: move to nearest polygon edge in XY
+        local best_q, best_d2
+        for i = 1, #poly.coords do
+            local a = poly.coords[i]
+            local b = poly.coords[(i % #poly.coords) + 1]
+            local qx, qy
+            local abx, aby = b.x - a.x, b.y - a.y
+            local apx, apy = x - a.x, y - a.y
+            local ab2 = abx * abx + aby * aby
+            local t = 0
+            if ab2 > 1e-9 then
+                t = (apx * abx + apy * aby) / ab2
+                if t < 0 then t = 0 elseif t > 1 then t = 1 end
+            end
+            qx, qy = a.x + abx * t, a.y + aby * t
+            local dx, dy = x - qx, y - qy
+            local d2 = dx * dx + dy * dy
+            if not best_d2 or d2 < best_d2 then
+                best_d2 = d2
+                best_q = { x = qx, y = qy }
+            end
+        end
+        if best_q then x, y = best_q.x, best_q.y end
+    end
+    -- After XY clamp, set z to plane-z to stick to surface
+    local z = compute_plane_z(poly.coords, x, y) or (poly.center and poly.center.z) or p.z
+    return { x = x, y = y, z = z }
+end
+
+-- Detail mesh z sampling: find the detail triangle under (x,y) and return barycentric z
+function sample_z_from_detail(tile, poly, x, y)
+    if not tile or not poly or not tile.detailMeshes or not tile.detailTris then return nil end
+    local dmesh = tile.detailMeshes[poly.id]
+    if not dmesh or dmesh.triCount == 0 then return nil end
+    local triBase = dmesh.triBase or 0
+    local vertBase = dmesh.vertBase or 0
+
+    local function get_tri_vertex(idx)
+        if idx < poly.vertCount then
+            local base_idx = (poly.verts[idx + 1] or 0)
+            local pos = base_idx * 3
+            -- base_idx is zero-based in Detour; our vertices array is 1-based packed floats
+            local vx = tile.vertices[pos + 1]
+            local vy = tile.vertices[pos + 2]
+            local vz = tile.vertices[pos + 3]
+            local gx, gy, gz = toGameCoordinates(vx, vy, vz)
+            return { x = gx, y = gy, z = gz }
+        else
+            local didx = vertBase + (idx - poly.vertCount)
+            local dx, dy, dz = tile.getDetailVertWorld(didx + 1)
+            if not dx or not dy or not dz then return nil end
+            local gx, gy, gz = toGameCoordinates(dx, dy, dz)
+            return { x = gx, y = gy, z = gz }
+        end
+    end
+
+    local function barycentric(p, a, b, c)
+        local v0x, v0y = b.x - a.x, b.y - a.y
+        local v1x, v1y = c.x - a.x, c.y - a.y
+        local v2x, v2y = x - a.x, y - a.y
+        local d00 = v0x * v0x + v0y * v0y
+        local d01 = v0x * v1x + v0y * v1y
+        local d11 = v1x * v1x + v1y * v1y
+        local d20 = v2x * v0x + v2y * v0y
+        local d21 = v2x * v1x + v2y * v1y
+        local denom = d00 * d11 - d01 * d01
+        if math.abs(denom) < 1e-9 then return nil end
+        local v = (d11 * d20 - d01 * d21) / denom
+        local w = (d00 * d21 - d01 * d20) / denom
+        local u = 1.0 - v - w
+        if u >= -1e-4 and v >= -1e-4 and w >= -1e-4 then
+            return u, v, w
+        end
+        return nil
+    end
+
+    for t = 0, (dmesh.triCount or 0) - 1 do
+        local tri_i = (triBase or 0) + t + 1
+        local tri = tile.detailTris[tri_i]
+        if tri then
+            local i0 = tri.v0 or tri.vertIndex0 or 0
+            local i1 = tri.v1 or tri.vertIndex1 or 0
+            local i2 = tri.v2 or tri.vertIndex2 or 0
+            local a = get_tri_vertex(i0)
+            local b = get_tri_vertex(i1)
+            local c = get_tri_vertex(i2)
+            if a and b and c then
+                local u, v, w = barycentric({ x = x, y = y }, a, b, c)
+                if u then
+                    return u * a.z + v * b.z + w * c.z
+                end
+            end
+        end
+    end
+    return nil
+end
+
+-- linter visibility
+sample_z_from_detail = sample_z_from_detail
+
+-- Choose best corridor polygon for a point based on XY inclusion and Z proximity
+local function choose_owner_poly_for_point(p, ids, poly_lookup)
+    -- Among overlapping polys that contain (x,y), choose the one whose center is closest in XY.
+    -- This tends to match the corridor segment the node belongs to and avoids jumping layers.
+    local best_poly, best_d2
+    local x, y = p.x, p.y
+    for _, pid in ipairs(ids or {}) do
+        local poly = poly_lookup and poly_lookup[pid]
+        if poly and poly.coords and #poly.coords >= 3 and point_in_polygon_xy(p, poly.coords) then
+            local cx, cy = (poly.center and poly.center.x) or 0, (poly.center and poly.center.y) or 0
+            local dx, dy = x - cx, y - cy
+            local d2 = dx * dx + dy * dy
+            if not best_d2 or d2 < best_d2 then
+                best_d2 = d2
+                best_poly = poly
+            end
+        end
+    end
+    return best_poly
+end
+
+-- Forward local refs so downstream code can see them for linter
+clamp_point_to_polygon = clamp_point_to_polygon
+
+-- Validate that all points of a path lie within the corridor polygons set
+function path_inside_corridor(points, poly_ids, poly_lookup)
+    if not points or #points == 0 then return false end
+    for _, p in ipairs(points) do
+        local ok = false
+        for _, pid in ipairs(poly_ids or {}) do
+            local poly = poly_lookup and poly_lookup[pid]
+            if poly and poly.coords and #poly.coords >= 3 then
+                if point_in_polygon_xy(p, poly.coords) then ok = true; break end
+            end
+        end
+        if not ok then return false end
+    end
+    return true
+end
+
 -- Utility: total 3D length of a point path
 local function path_total_length(points)
     if not points or #points < 2 then return 0 end
@@ -2366,6 +2351,10 @@ end
 
 function TileManager:draw_path_polygons()
     if not self.path_poly_ids or not self.poly_lookup then return end
+    if self.path_graph_id and self.path_graph_id ~= self.graph_build_id then
+        -- Corridor stale relative to current merged graph; skip drawing to avoid far-away artifacts
+        return
+    end
     local color = require('common/color')
     local vec3 = require('common/geometry/vector_3')
     local edge_col = color.new(80, 200, 255, 220)
@@ -2413,6 +2402,69 @@ function TileManager:draw_path_polygons()
             end
         end
     end
+end
+
+-- Draw only the corridor polygons in 3 nested alpha levels:
+-- - Dark transparent green for the path polygons
+-- - Normal transparent green for their immediate neighbors
+-- - Very transparent green for neighbors of those
+function TileManager:draw_path_corridor_layers()
+    if not self.path_poly_ids or not self.poly_lookup then return end
+    if self.path_graph_id and self.path_graph_id ~= self.graph_build_id then return end
+    local color = require('common/color')
+    local vec3 = require('common/geometry/vector_3')
+
+    local function fill(poly, col, zoff)
+        if not poly or not poly.coords or #poly.coords < 3 then return end
+        local base = poly.coords[1]
+        for i = 2, #poly.coords - 1 do
+            local p1 = vec3.new(base.x, base.y, base.z + zoff)
+            local p2 = vec3.new(poly.coords[i].x, poly.coords[i].y, poly.coords[i].z + zoff)
+            local p3 = vec3.new(poly.coords[i+1].x, poly.coords[i+1].y, poly.coords[i+1].z + zoff)
+            core.graphics.triangle_3d_filled(p1, p2, p3, col)
+        end
+    end
+
+    -- Collect adjacency from built graph
+    local adj = self.graph.edges or {}
+
+    -- Build sets for layers
+    local layer0 = {}
+    local layer1 = {}
+    local layer2 = {}
+    local in_l0 = {}
+    local in_l1 = {}
+
+    for _, pid in ipairs(self.path_poly_ids) do
+        layer0[#layer0 + 1] = pid
+        in_l0[pid] = true
+    end
+    for _, pid in ipairs(layer0) do
+        for _, nb in ipairs(adj[pid] or {}) do
+            if not in_l0[nb] and not in_l1[nb] then
+                layer1[#layer1 + 1] = nb
+                in_l1[nb] = true
+            end
+        end
+    end
+    local in_l2 = {}
+    for _, pid in ipairs(layer1) do
+        for _, nb in ipairs(adj[pid] or {}) do
+            if not in_l0[nb] and not in_l1[nb] and not in_l2[nb] then
+                layer2[#layer2 + 1] = nb
+                in_l2[nb] = true
+            end
+        end
+    end
+
+    -- Colors
+    local c0 = color.new(30, 160, 60, 160)  -- dark transparent green
+    local c1 = color.new(30, 200, 80, 100)  -- normal transparent green
+    local c2 = color.new(30, 220, 100, 50)  -- very transparent green
+
+    for _, pid in ipairs(layer0) do fill(self.poly_lookup[pid], c0, 0.015) end
+    for _, pid in ipairs(layer1) do fill(self.poly_lookup[pid], c1, 0.010) end
+    for _, pid in ipairs(layer2) do fill(self.poly_lookup[pid], c2, 0.005) end
 end
 
 -- Utility: squared distance from point C to segment AB (ignore z for stability)
@@ -2547,6 +2599,7 @@ function TileManager:render_menu()
         
         self.cb_draw_mesh = core.menu.checkbox(false, "lx_nav_draw_mesh")
         self.cb_draw_path_polys = core.menu.checkbox(false, "lx_nav_draw_path_polys")
+        self.cb_draw_corridor_layers = core.menu.checkbox(false, "lx_nav_draw_corridor_layers_only")
         self.menu_inited = true
     end
 
@@ -2556,6 +2609,8 @@ function TileManager:render_menu()
         self.draw_navmesh_enabled = self.cb_draw_mesh:get_state()
         self.cb_draw_path_polys:render("Draw path polys")
         self.draw_path_polygons_enabled = self.cb_draw_path_polys:get_state()
+        self.cb_draw_corridor_layers:render("Corridor layers (no path)")
+        self.draw_corridor_layers_only = self.cb_draw_corridor_layers:get_state()
 
         -- Save position button
         self.btn_save:render("Save position")

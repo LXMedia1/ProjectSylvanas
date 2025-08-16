@@ -178,12 +178,62 @@ function MMap.parse_tile(data)
     if pos + bytes_to_read -1 > #data then return nil, "Data too short for polys. Expected: " .. bytes_to_read .. ", Remaining: " .. (#data - pos + 1) end
     tile_data.polys_raw = string.sub(data, pos, pos + bytes_to_read - 1)
     pos = pos + bytes_to_read
+    -- Parse dtPoly into structured tables
+    tile_data.polys = {}
+    do
+        local raw = tile_data.polys_raw
+        for i = 1, tile_data.polyCount do
+            local base = (i - 1) * POLY_SIZE + 1
+            if base + POLY_SIZE - 1 <= #raw then
+                local p = base + 4 -- skip firstLink
+                local verts, neis = {}, {}
+                for j = 1, 6 do
+                    local lo = string.byte(raw, p)
+                    local hi = string.byte(raw, p + 1)
+                    verts[j] = (lo or 0) + (hi or 0) * 256
+                    p = p + 2
+                end
+                for j = 1, 6 do
+                    local lo = string.byte(raw, p)
+                    local hi = string.byte(raw, p + 1)
+                    neis[j] = (lo or 0) + (hi or 0) * 256
+                    p = p + 2
+                end
+                local flags = ((string.byte(raw, p) or 0) + (string.byte(raw, p + 1) or 0) * 256); p = p + 2
+                local vertCount = string.byte(raw, p) or 0
+                local areaAndtype = string.byte(raw, p + 1) or 0
+                tile_data.polys[i] = {
+                    id = i,
+                    verts = verts,
+                    neis = neis,
+                    flags = flags,
+                    vertCount = vertCount,
+                    areaAndtype = areaAndtype,
+                }
+            end
+        end
+    end
 
     -- PolyDetail
     bytes_to_read = tile_data.detailMeshCount * POLY_DETAIL_SIZE
     if pos + bytes_to_read -1 > #data then return nil, "Data too short for poly details. Expected: " .. bytes_to_read .. ", Remaining: " .. (#data - pos + 1) end
     tile_data.detailMeshes_raw = string.sub(data, pos, pos + bytes_to_read - 1)
     pos = pos + bytes_to_read
+    -- Parse dtPolyDetail meshes
+    tile_data.detailMeshes = {}
+    do
+        local raw = tile_data.detailMeshes_raw
+        for i = 1, tile_data.detailMeshCount do
+            local base = (i - 1) * POLY_DETAIL_SIZE + 1
+            if base + POLY_DETAIL_SIZE - 1 <= #raw then
+                local vb = read_u32_val(raw, base)
+                local tb = read_u32_val(raw, base + 4)
+                local vc = string.byte(raw, base + 8) or 0
+                local tc = string.byte(raw, base + 9) or 0
+                tile_data.detailMeshes[i] = { vertBase = vb or 0, triBase = tb or 0, vertCount = vc, triCount = tc }
+            end
+        end
+    end
 
     -- DetailVerts (packed uint32)
     tile_data.detailVerts = {}
@@ -199,7 +249,14 @@ function MMap.parse_tile(data)
         table.insert(tile_data.detailVerts, {x = x or 0, y = y or 0, z = z or 0})
     end
     tile_data.getDetailVertWorld = function(i)
+        -- Guard against out-of-range indices
+        if not i or i < 1 or i > (tile_data.detailVertCount or 0) then
+            return nil, nil, nil
+        end
         local v = tile_data.detailVerts[i]
+        if not v then
+            return nil, nil, nil
+        end
         return dequant16(v.x, tile_data.bmin.x, tile_data.bmax.x),
                dequant16(v.y, tile_data.bmin.y, tile_data.bmax.y),
                dequant16(v.z, tile_data.bmin.z, tile_data.bmax.z)
@@ -210,24 +267,103 @@ function MMap.parse_tile(data)
     if pos + bytes_to_read -1 > #data then return nil, "Data too short for detail tris. Expected: " .. bytes_to_read .. ", Remaining: " .. (#data - pos + 1) end
     tile_data.detailTris_raw = string.sub(data, pos, pos + bytes_to_read - 1)
     pos = pos + bytes_to_read
+    -- Parse dtDetailTri (each 4 bytes: v0,v1,v2,flags)
+    tile_data.detailTris = {}
+    do
+        local raw = tile_data.detailTris_raw
+        for i = 1, tile_data.detailTriCount do
+            local base = (i - 1) * DETAIL_TRI_SIZE + 1
+            if base + DETAIL_TRI_SIZE - 1 <= #raw then
+                local v0 = string.byte(raw, base) or 0
+                local v1 = string.byte(raw, base + 1) or 0
+                local v2 = string.byte(raw, base + 2) or 0
+                local f  = string.byte(raw, base + 3) or 0
+                tile_data.detailTris[i] = { v0 = v0, v1 = v1, v2 = v2, flags = f }
+            end
+        end
+    end
 
     -- BVNodes
     bytes_to_read = tile_data.bvNodeCount * BVNODE_SIZE
     if pos + bytes_to_read -1 > #data then return nil, "Data too short for BV nodes. Expected: " .. bytes_to_read .. ", Remaining: " .. (#data - pos + 1) end
     tile_data.bvNodes_raw = string.sub(data, pos, pos + bytes_to_read - 1)
     pos = pos + bytes_to_read
+    -- Parse dtBVNode entries (int16 bmin[3], int16 bmax[3], int i)
+    tile_data.bvNodes = {}
+    do
+        local raw = tile_data.bvNodes_raw
+        for i = 1, tile_data.bvNodeCount do
+            local base = (i - 1) * BVNODE_SIZE + 1
+            if base + BVNODE_SIZE - 1 <= #raw then
+                local function s16(off)
+                    local lo = string.byte(raw, off) or 0
+                    local hi = string.byte(raw, off + 1) or 0
+                    local v = lo + hi * 256
+                    if v >= 32768 then v = v - 65536 end
+                    return v
+                end
+                local bmin0 = s16(base); local bmin1 = s16(base + 2); local bmin2 = s16(base + 4)
+                local bmax0 = s16(base + 6); local bmax1 = s16(base + 8); local bmax2 = s16(base + 10)
+                local idx = read_u32_val(raw, base + 12)
+                tile_data.bvNodes[i] = { bmin = { bmin0, bmin1, bmin2 }, bmax = { bmax0, bmax1, bmax2 }, nodeId = idx or 0 }
+            end
+        end
+    end
 
     -- OffMeshCons
     bytes_to_read = tile_data.offMeshConCount * OFFMESH_CON_SIZE
     if pos + bytes_to_read -1 > #data then return nil, "Data too short for off-mesh connections. Expected: " .. bytes_to_read .. ", Remaining: " .. (#data - pos + 1) end
     tile_data.offMeshCons_raw = string.sub(data, pos, pos + bytes_to_read -  1)
     pos = pos + bytes_to_read
+    -- Parse dtOffMeshConnection entries
+    tile_data.offMeshCons = {}
+    do
+        local raw = tile_data.offMeshCons_raw
+        for i = 1, tile_data.offMeshConCount do
+            local base = (i - 1) * OFFMESH_CON_SIZE + 1
+            if base + OFFMESH_CON_SIZE - 1 <= #raw then
+                local pos0 = {
+                    read_f32_val(raw, base + 0),
+                    read_f32_val(raw, base + 4),
+                    read_f32_val(raw, base + 8),
+                    read_f32_val(raw, base + 12),
+                    read_f32_val(raw, base + 16),
+                    read_f32_val(raw, base + 20),
+                }
+                local radius = read_f32_val(raw, base + 24)
+                local flags  = read_u32_val(string.char(string.byte(raw, base + 28) or 0, string.byte(raw, base + 29) or 0, 0, 0), 1) -- uint16
+                flags = (string.byte(raw, base + 28) or 0) + (string.byte(raw, base + 29) or 0) * 256
+                local side   = string.byte(raw, base + 30) or 0
+                local userId = string.byte(raw, base + 31) or 0
+                tile_data.offMeshCons[i] = { pos = pos0, radius = radius or 0.0, flags = flags, side = side, userId = userId }
+            end
+        end
+    end
 
     -- Links
     bytes_to_read = tile_data.maxLinkCount * LINK_SIZE
     if pos + bytes_to_read -1 > #data then return nil, "Data too short for links. Expected: " .. bytes_to_read .. ", Remaining: " .. (#data - pos + 1) end
     tile_data.links_raw = string.sub(data, pos, pos + bytes_to_read - 1)
     pos = pos + bytes_to_read
+    -- Parse dtLink entries (subset)
+    tile_data.links = {}
+    do
+        local raw = tile_data.links_raw
+        for i = 1, tile_data.maxLinkCount do
+            local base = (i - 1) * LINK_SIZE + 1
+            if base + LINK_SIZE - 1 <= #raw then
+                local ref = read_u32_val(raw, base)
+                local dir = string.byte(raw, base + 4) or 0
+                local side = string.byte(raw, base + 5) or 0
+                local bmin = string.byte(raw, base + 6) or 0
+                local bmax = string.byte(raw, base + 7) or 0
+                local userId = read_u32_val(raw, base + 8)
+                if ref ~= 0 then
+                    tile_data.links[#tile_data.links + 1] = { id = i, ref = ref, dir = dir, side = side, bmin = bmin, bmax = bmax, userId = userId or 0 }
+                end
+            end
+        end
+    end
 
     local consumed = pos - 21
     if consumed ~= tile_data.dataSize then
@@ -235,6 +371,14 @@ function MMap.parse_tile(data)
     end
 
     return tile_data
+end
+
+function MMap.parse_tile_file(filename)
+	local data = core.read_data_file(filename)
+	if not data or data == "" then
+		return nil, "Failed to read file: " .. tostring(filename)
+	end
+	return MMap.parse_tile(data)
 end
 
 local function read_binary_file(path)

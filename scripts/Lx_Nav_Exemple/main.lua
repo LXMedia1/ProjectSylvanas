@@ -28,6 +28,8 @@ core.register_on_render_menu_callback(function()
     ui.cb_show_path = core.menu.checkbox(false, "lx_nav_example_show_path")
     ui.cb_debuglog = core.menu.checkbox(false, "lx_nav_example_debuglog")
     ui.cb_use_look_at = core.menu.checkbox(false, "lx_nav_example_use_look_at")
+    ui.cb_layer_view = core.menu.checkbox(false, "lx_nav_example_corridor_layers")
+    ui.cb_path_polys = core.menu.checkbox(false, "lx_nav_example_draw_path_polys")
     ui.btn_save = core.menu.button("lx_nav_example_save")
     ui.btn_path = core.menu.button("lx_nav_example_path")
     ui.btn_move = core.menu.button("lx_nav_example_move")
@@ -43,6 +45,12 @@ core.register_on_render_menu_callback(function()
 
     ui.cb_use_look_at:render("Use look_at steering (toggle)")
     Nav.set_use_look_at(ui.cb_use_look_at:get_state())
+
+    ui.cb_layer_view:render("Corridor layers (no path)")
+    Nav.set_draw_corridor_layers(ui.cb_layer_view:get_state())
+
+    ui.cb_path_polys:render("Draw path polys")
+    Nav.set_draw_path_polys(ui.cb_path_polys:get_state())
 
     ui.btn_save:render("Save target")
     if ui.btn_save:is_clicked() then

@@ -19,6 +19,8 @@ function _G.Lx_Nav.init()
     set_show_path = function(v) tm.show_path = not not v end,
     set_debuglog = function(v) tm.debuglog_enabled = not not v end,
     set_use_look_at = function(v) tm.use_look_at = not not v end,
+    set_draw_corridor_layers = function(v) tm.draw_corridor_layers_only = not not v end,
+    set_draw_path_polys = function(v) tm.draw_path_polygons_enabled = not not v end,
     -- properties (shortcut style)
     __tm = tm,
     -- movement
