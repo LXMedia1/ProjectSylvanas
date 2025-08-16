@@ -33,6 +33,8 @@ Notes
 - Respect Lua 5.1 sandbox and require-path rules.
 
 - Docs
+  - Lx_Nav: Document consistent 0.35 m edge quantization for cross-tile adjacency; note incremental graph build quantization cache.
+  - Lx_Nav: Update API docs to state initial center tile loads immediately and triggers an initial graph build without movement.
   - Update `@docs/Lx_UI.md` to clarify Designer inline rename: arrow keys move caret/selection (no character insertion).
   - Document double-click-to-edit behavior: double-click selects full text for quick overwrite.
   - Note: In inline edit, double-click inside input also selects all; ESC exits edit mode to allow moving components.

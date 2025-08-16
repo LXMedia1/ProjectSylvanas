@@ -826,7 +826,8 @@ function TileManager:update(pos)
     local changed = self:ensure_neighbor_tiles_loaded(tile_x, tile_y, self.tile_load_radius or 1)
     -- Evict far-away tiles to avoid memory bloat over time
     self:evict_far_tiles(tile_x, tile_y, self.tile_keep_radius or 2)
-    if changed or self.tiles_dirty then
+    -- On initial startup, self.current_tile is nil; force a first-time graph build once center is loaded
+    if changed or self.tiles_dirty or (self.graph and (not next(self.graph.nodes))) then
         self:schedule_incremental_graph_build()
         self.tiles_dirty = false
     end
@@ -863,6 +864,35 @@ function TileManager:ensure_neighbor_tiles_loaded(cx, cy, radius)
     local budget_ms = self.tile_load_budget_ms or 2.0
     local hz = core.cpu_ticks_per_second and core.cpu_ticks_per_second() or 0
     local budget_ticks = (hz and hz > 0) and (budget_ms * hz / 1000.0) or 0
+    -- Always try to load the center tile first (no budget gating) so initial graph builds without movement
+    local center_key = tostring(cx) .. ":" .. tostring(cy)
+    if not self.loaded_tiles[center_key] then
+        local filename = self:format_tile_filename(continent_id, cx, cy)
+        local t_read0 = core.cpu_ticks and core.cpu_ticks() or 0
+        local raw = core.read_data_file(filename)
+        local t_read1 = core.cpu_ticks and core.cpu_ticks() or 0
+        local read_ms = ticks_to_ms((t_read1 or 0) - (t_read0 or 0))
+        if raw and #raw > 0 then
+            local t_parse0 = core.cpu_ticks and core.cpu_ticks() or 0
+            local parsed, perr = MMap.parse_tile(raw)
+            local t_parse1 = core.cpu_ticks and core.cpu_ticks() or 0
+            local parse_ms = ticks_to_ms((t_parse1 or 0) - (t_parse0 or 0))
+            if parsed then
+                local t_extract0 = core.cpu_ticks and core.cpu_ticks() or 0
+                local polys = extract_polygons_from_tile(parsed)
+                local t_extract1 = core.cpu_ticks and core.cpu_ticks() or 0
+                local extract_ms = ticks_to_ms((t_extract1 or 0) - (t_extract0 or 0))
+                self.tiles[center_key] = { tile_data = parsed, polygons = polys }
+                self.loaded_tiles[center_key] = true
+                any_loaded = true
+                if self.profile_enabled and (self.profile_log_each_tile or read_ms > self.profile_threshold_ms or parse_ms > self.profile_threshold_ms or extract_ms > self.profile_threshold_ms) then
+                    core.log(string.format("[Perf] tile %s read=%.2fms parse=%.2fms extract=%.2fms verts=%d polys=%d", filename, read_ms, parse_ms, extract_ms, parsed.vertCount or -1, (polys and #polys or 0)))
+                end
+            else
+                core.log_warning("Failed to parse tile: " .. filename .. " reason=" .. tostring(perr))
+            end
+        end
+    end
     for dx = -r, r do
         for dy = -r, r do
             if budget_ticks > 0 then
@@ -1135,7 +1165,8 @@ function TileManager:schedule_incremental_graph_build()
         return math.abs(horiz / nz)
     end
     local function q(v)
-        local s = 0.1
+        -- Use consistent 35cm bins across builders for robust cross-tile edge merging
+        local s = 0.35
         local x = math.floor(v.x / s + 0.5)
         local y = math.floor(v.y / s + 0.5)
         return tostring(x) .. "," .. tostring(y)
@@ -1151,6 +1182,22 @@ function TileManager:schedule_incremental_graph_build()
         local hz = core.cpu_ticks_per_second and core.cpu_ticks_per_second() or 0
         local inner_budget_ms = (self.graph_inner_budget_ms or self.graph_target_batch_ms or 2.5)
         local inner_budget_ticks = (hz > 0) and (inner_budget_ms * hz / 1000.0) or 0
+        -- Tiny quantization cache to avoid recomputing string keys for the same vertex tables
+        local quant_cache = {}
+        local function q_cached(v)
+            local cached = quant_cache[v]
+            if cached then return cached end
+            local s = 0.35
+            local x = math.floor(v.x / s + 0.5)
+            local y = math.floor(v.y / s + 0.5)
+            local key = tostring(x) .. "," .. tostring(y)
+            quant_cache[v] = key
+            return key
+        end
+        local function edge_key_cached(pa, pb)
+            local a1, a2 = q_cached(pa), q_cached(pb)
+            if a1 < a2 then return a1 .. "|" .. a2 else return a2 .. "|" .. a1 end
+        end
         while i <= #merged do
             local batch = self.graph_batch_size or 200
             local until_i = math.min(#merged, i + batch)
@@ -1169,7 +1216,7 @@ function TileManager:schedule_incremental_graph_build()
                         local a = poly.coords[j]
                         local b = poly.coords[(j % #poly.coords) + 1]
                         if a and b then
-                            local key = edge_key(a, b)
+                            local key = edge_key_cached(a, b)
                             local owner = self.edge_index[key]
                             if owner and owner ~= k then
                                 table.insert(self.graph.edges[k], owner)
