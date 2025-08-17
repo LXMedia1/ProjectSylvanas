@@ -4,7 +4,7 @@ plugin["name"] = "Lx_Nav"
 plugin["version"] = "1.0.0"
 plugin["author"] = "Lexxer"
 plugin["description"] = "Professional standalone navigation library with advanced pathfinding and human-like movement"
-plugin["load"] = true
+plugin["load"] = false
 plugin["is_library"] = true
 plugin["is_required_dependency"] = true
 

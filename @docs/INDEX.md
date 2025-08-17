@@ -17,4 +17,7 @@ Lx_Nav Documentation Index
   - Color Picker styles: see `Lx_UI.md` (Color Picker section)
 
 
+- Lx_Nav_2 Example: `Lx_Nav_2_Example.md`
+
+
 

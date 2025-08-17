@@ -17,3 +17,5 @@ scripts/core_universal_utility
 /scripts_log
 *.zip
 /external
+/.claude-flow
+/.swarm
